@@ -57,8 +57,59 @@ Layer分離
 
 trivy --download-db-only
 
+3. 現実的な抽出方法（重要）
+
+Trivy内部DB形式を直接読むより、Trivyが持つ advisory JSON を利用する方が安全です。
+Trivy repo / advisory sources を JSON取得
 
 次にやるべき実装（超重要）
 Trivyの実DB形式から直接抽出するコード
-または
 ecosystem別 version comparator 実装
+
+
+```python
+import sqlite3
+import json
+
+DB = "core.db"
+
+conn = sqlite3.connect(DB)
+cur = conn.cursor()
+
+with open("trivy_advisories.json") as f:
+    advisories = json.load(f)
+
+for item in advisories:
+    vuln_id = item["VulnerabilityID"]
+    pkg = item["PkgName"]
+    fixed = item.get("FixedVersion")
+    severity = item.get("Severity", "UNKNOWN")
+
+    # InstalledVersion をそのまま条件として使わず、
+    # advisory由来の affected range があればそちら優先
+    affected = "< " + fixed if fixed else None
+
+    cur.execute("""
+        INSERT INTO package_impacts (
+            vuln_id,
+            ecosystem,
+            package_name,
+            affected_constraint,
+            fixed_version,
+            severity,
+            provider
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        vuln_id,
+        "linux",
+        pkg,
+        affected,
+        fixed,
+        severity,
+        "Trivy"
+    ))
+
+conn.commit()
+conn.close()
+
+```
