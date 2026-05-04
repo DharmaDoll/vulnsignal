@@ -41,7 +41,7 @@ Trivy は内部で脆弱性DBを持っています。
 ① 内部構造がTrivy都合
 Trivy用に最適化されているため：
 
-③ あなたの目的は判断基盤
+③ 目的は判断基盤
 必要なのは全内部構造ではなく：
 	•	このCVEは何に効くか
 	•	fixed versionは何か
@@ -51,13 +51,11 @@ Trivy用に最適化されているため：
 
 ⸻
 
-3. 統合方針（推奨）
-Layer分離
-
-
-trivy --download-db-only
-
 3. 現実的な抽出方法（重要）
+
+```
+trivy --download-db-only
+```
 
 Trivy内部DB形式を直接読むより、Trivyが持つ advisory JSON を利用する方が安全です。
 Trivy repo / advisory sources を JSON取得
