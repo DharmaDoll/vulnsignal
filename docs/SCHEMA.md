@@ -88,7 +88,7 @@ CREATE TABLE decisions (
 
 ### signals
 
-Append-only intelligence feed. Core of the platform.
+Append-only intelligence event feed. Core risk-relevant observations live here, but high-volume current-state feeds can use dedicated tables and only emit material changes as signals.
 
 ```sql
 CREATE TABLE signals (
@@ -99,6 +99,20 @@ CREATE TABLE signals (
   score        REAL,
   value_json   TEXT,           -- JSON blob for structured data
   observed_at  TEXT NOT NULL
+);
+```
+
+### epss_current
+
+Current EPSS values. EPSS is high-volume, so daily full snapshots are upserted here instead of appended wholesale to `signals`.
+
+```sql
+CREATE TABLE epss_current (
+  vuln_id     TEXT PRIMARY KEY,
+  epss        REAL NOT NULL,
+  percentile  REAL,
+  score_date  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
 );
 ```
 

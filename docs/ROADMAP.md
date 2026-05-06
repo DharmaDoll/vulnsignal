@@ -20,13 +20,14 @@ Key decisions:
 |Done|Initial schema and migration runner|`db/migrate.py` creates `core.db` with core tables and indexes|
 |Done|Core fetch foundation|Common fetch/cache/log/signal helpers exist and write `fetch_log`|
 |Done|KEV sample ingestion|Small KEV fetch writes `kev` signals|
-|Done|EPSS sample ingestion|Small EPSS fetch writes `epss` signals|
+|Done|EPSS bulk CSV ingestion|EPSS fetcher reads FIRST bulk CSV and upserts `epss_current`|
 |Done|GHSA sample ingestion|Small GHSA fetch writes `enrichment` and `package_advisory` signals|
 |Done|Trivy JSON importer|Sample advisory JSON produces `package_advisory` signals through `sync/trivy_adapter.py`|
 |Done|Feed quality summary|A local command reports simple feed metrics from `core.db`|
+|Done|go-exploitdb adapter|All go-exploitdb access goes through `sync/exploit_adapter.py` with schema validation|
+|Done|go-exploitdb sample ingestion|Sample import writes `exploit` signals and records source URL/type when available|
+|Done|go-exploitdb refresh wrapper|Local command wraps `go-exploitdb fetch` and validates resulting SQLite schema|
 |Next|Trivy vuln-list fetcher|Fetch selected JSON trees from `aquasecurity/vuln-list` and pass them through `sync/trivy_adapter.py`|
-|Planned|go-exploitdb adapter|All go-exploitdb access goes through `sync/exploit_adapter.py` with schema validation|
-|Planned|go-exploitdb sample ingestion|Sample import writes `exploit` signals and records source URL/type when available|
 |Planned|Vulnrichment ingestion|Sample import writes severity/CVSS/summary enrichment without overwriting higher-trust data|
 |Planned|Asset CSV importer|CSV import creates or updates `assets` with conservative defaults|
 |Planned|Minimal scoring/ranking|v1 scoring works from latest signals and ranking excludes VEX `not_affected`|
@@ -47,6 +48,8 @@ Each feed should report:
 These metrics are intentionally simple. The final data quality judgment should combine them with manual inspection of representative samples.
 
 Note: `rows_fetched` is currently returned by fetch commands but is not persisted in `fetch_log` yet.
+
+High-volume current-state feeds should not append every row to `signals`. EPSS uses `epss_current`; `signals` should only receive material EPSS events later.
 
 ## Trivy Data Acquisition Plan
 
@@ -70,5 +73,27 @@ Compiled DB ingestion is intentionally later because it requires schema inspecti
 - Exact asset CSV columns and required fields.
 - Whether GHSA `unreviewed` advisories should be included after reviewed advisories are stable.
 - Whether Trivy `vuln-list` should be fetched by git clone, GitHub archive download, or a pinned local path.
-- go-exploitdb schema version detection method.
+- Whether to run all go-exploitdb sources by default or keep a smaller source set for routine refresh.
 - Whether internal override should eventually become the highest-trust severity source.
+
+## go-exploitdb Verification Notes
+
+On 2026-05-06, `go-exploitdb fetch exploitdb` was verified with the v0.7.0 command installed under `/tmp`.
+
+Observed results:
+
+- `exploitdb` source fetched 60,578 Offensive Security records.
+- 30,862 records had CVE IDs and were importable as `exploit` signals.
+- SQLite tables included `exploits`, `fetch_meta`, `documents`, `offensive_securities`, `shell_codes`, `papers`, and `ghdbs`.
+- `fetch_meta.schema_version` was `3`.
+
+Routine refresh still needs a decision on whether to fetch only `exploitdb` or also `awesomepoc`, `githubrepos`, `inthewild`, and `nuclei`.
+
+## go-exploitdb Insights
+
+The current go-exploitdb behavior suggests the following:
+
+- The database is not a single-purpose CVE table; it stores multiple source families, so adapter boundaries need to remain narrow.
+- The CVE-linked subset is materially smaller than the raw Offensive Security feed, which matters for refresh cost and downstream signal density.
+- `fetch_meta` is the stable place to read schema version from current builds.
+- The project should treat `exploitdb` as the default operational source and add the auxiliary sources only when a use case justifies the extra volume.

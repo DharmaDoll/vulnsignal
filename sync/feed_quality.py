@@ -103,6 +103,29 @@ def signal_rows(conn: sqlite3.Connection, feed: str) -> list[sqlite3.Row]:
     )
 
 
+def epss_current_count(conn: sqlite3.Connection) -> int:
+    return int(conn.execute("SELECT count(*) FROM epss_current").fetchone()[0])
+
+
+def epss_required_field_coverage(conn: sqlite3.Connection) -> float | None:
+    total = epss_current_count(conn)
+    if not total:
+        return None
+    complete = int(
+        conn.execute(
+            """
+            SELECT count(*)
+            FROM epss_current
+            WHERE vuln_id IS NOT NULL
+              AND vuln_id != ''
+              AND epss IS NOT NULL
+              AND percentile IS NOT NULL
+            """
+        ).fetchone()[0]
+    )
+    return round(complete / total, 4)
+
+
 def required_field_coverage(feed: str, signal_items: list[sqlite3.Row]) -> float | None:
     required = REQUIRED_FIELDS.get(feed)
     if not required or not signal_items:
@@ -154,6 +177,22 @@ def staleness_status(feed: str, attempted_at: str | None) -> str:
 def summarize_feed(conn: sqlite3.Connection, feed: str) -> dict[str, Any]:
     fetch = last_fetch(conn, feed)
     success = last_success(conn, feed)
+    if feed == "epss":
+        current_count = epss_current_count(conn)
+        return {
+            "feed": feed,
+            "rows_fetched": None,
+            "signals_written": len(signal_rows(conn, feed)),
+            "current_rows": current_count,
+            "vuln_id_coverage": 1.0 if current_count else 0.0,
+            "required_field_coverage": epss_required_field_coverage(conn),
+            "duplicate_rate": 0.0,
+            "last_success_at": success["attempted_at"] if success else None,
+            "staleness_status": staleness_status(feed, success["attempted_at"] if success else None),
+            "last_fetch_status": fetch["status"] if fetch else "missing",
+            "last_rows_affected": fetch["rows_affected"] if fetch else None,
+        }
+
     signals = signal_rows(conn, feed)
     vuln_ids = [signal["vuln_id"] for signal in signals if signal["vuln_id"]]
 
@@ -161,6 +200,7 @@ def summarize_feed(conn: sqlite3.Connection, feed: str) -> dict[str, Any]:
         "feed": feed,
         "rows_fetched": None,
         "signals_written": len(signals),
+        "current_rows": None,
         "vuln_id_coverage": 1.0 if signals and len(vuln_ids) == len(signals) else 0.0,
         "required_field_coverage": required_field_coverage(feed, signals),
         "duplicate_rate": duplicate_rate(signals),
@@ -184,6 +224,7 @@ def print_table(items: list[dict[str, Any]]) -> None:
     columns = (
         "feed",
         "signals_written",
+        "current_rows",
         "vuln_id_coverage",
         "required_field_coverage",
         "duplicate_rate",

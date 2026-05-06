@@ -56,7 +56,7 @@ Use `ATTACH DATABASE` for cross-DB queries only when necessary. ETL summaries in
 
 ## Key design decisions
 
-**Signals are append-only.** Never update or delete signal records. This preserves history for EPSS drift, VEX reversals, and exploit emergence tracking.
+**Signals are append-only for emitted events.** Never update or delete signal records once emitted. High-volume current-state feeds such as EPSS use dedicated current tables and only append risk-relevant events or material changes to `signals`.
 
 **Adapters isolate external schema churn.** Both Trivy DB and go-exploitdb have broken their schemas across versions. All external DB access goes through adapter modules with schema version pinning.
 

@@ -5,6 +5,19 @@ Current feed priority: KEV, EPSS, GHSA, Trivy JSON, Vulnrichment, go-exploitdb. 
 
 Current implementation plan: `docs/ROADMAP.md`
 
+go-exploitdb execution path:
+
+1. Install a matching binary, for example `go install github.com/vulsio/go-exploitdb@v0.7.0`.
+2. Fetch SQLite data, for example `go-exploitdb fetch exploitdb --dbtype sqlite3 --dbpath db/exploit.db`.
+3. Validate the generated DB through `sync/exploit_adapter.py`.
+4. Import CVE-linked rows with `python3 -m sync.fetch_exploitdb --db db/exploit.db`.
+
+Observed in this project:
+
+- `exploitdb` produced 60,578 Offensive Security records.
+- 30,862 of those rows had CVE IDs and were importable as `exploit` signals.
+- The current go-exploitdb build exposes `exploits` plus `fetch_meta`, where `fetch_meta.schema_version` was `3`.
+
 
 ```
 project/

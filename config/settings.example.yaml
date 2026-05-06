@@ -21,3 +21,7 @@ feeds:
     enabled: true
   vex:
     enabled: false
+
+exploit_db:
+  path: db/exploit.db
+  expected_schema_version: 3

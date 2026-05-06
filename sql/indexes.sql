@@ -5,3 +5,5 @@ CREATE INDEX IF NOT EXISTS idx_findings_vuln_id     ON findings(vuln_id);
 CREATE INDEX IF NOT EXISTS idx_findings_asset_id    ON findings(asset_id);
 CREATE INDEX IF NOT EXISTS idx_findings_risk_score  ON findings(risk_score DESC);
 CREATE INDEX IF NOT EXISTS idx_fetch_log_feed       ON fetch_log(feed, attempted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_epss_current_epss    ON epss_current(epss DESC);
+CREATE INDEX IF NOT EXISTS idx_epss_current_percentile ON epss_current(percentile DESC);

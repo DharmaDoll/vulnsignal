@@ -37,23 +37,37 @@ def connect(db_path: Path = DB_PATH) -> sqlite3.Connection:
     return conn
 
 
-def fetch_json(url: str, headers: dict[str, str] | None = None, attempts: int = 3) -> Any:
+def fetch_bytes(url: str, headers: dict[str, str] | None = None, attempts: int = 3) -> bytes:
     request = Request(url, headers=headers or {})
     last_error: Exception | None = None
     for attempt in range(attempts):
         try:
             with urlopen(request, timeout=60) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except (URLError, TimeoutError, json.JSONDecodeError) as exc:
+                return response.read()
+        except (URLError, TimeoutError) as exc:
             last_error = exc
             if attempt < attempts - 1:
                 time.sleep(min(300, 5 * (2**attempt)))
     raise FetchError(str(last_error))
 
 
-def cache_path(feed: str) -> Path:
+def fetch_text(url: str, headers: dict[str, str] | None = None, attempts: int = 3) -> str:
+    try:
+        return fetch_bytes(url, headers=headers, attempts=attempts).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise FetchError(str(exc)) from exc
+
+
+def fetch_json(url: str, headers: dict[str, str] | None = None, attempts: int = 3) -> Any:
+    try:
+        return json.loads(fetch_text(url, headers=headers, attempts=attempts))
+    except json.JSONDecodeError as exc:
+        raise FetchError(str(exc)) from exc
+
+
+def cache_path(feed: str, suffix: str = "json") -> Path:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    return CACHE_DIR / f"{feed}.json"
+    return CACHE_DIR / f"{feed}.{suffix}"
 
 
 def read_cache(feed: str) -> Any:
@@ -65,6 +79,28 @@ def read_cache(feed: str) -> Any:
 
 def write_cache(feed: str, payload: Any) -> None:
     cache_path(feed).write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def read_text_cache(feed: str, suffix: str = "txt") -> str:
+    path = cache_path(feed, suffix)
+    if not path.exists():
+        raise FetchError(f"cache missing for {feed}: {path}")
+    return path.read_text(encoding="utf-8")
+
+
+def write_text_cache(feed: str, payload: str, suffix: str = "txt") -> None:
+    cache_path(feed, suffix).write_text(payload, encoding="utf-8")
+
+
+def read_bytes_cache(feed: str, suffix: str = "bin") -> bytes:
+    path = cache_path(feed, suffix)
+    if not path.exists():
+        raise FetchError(f"cache missing for {feed}: {path}")
+    return path.read_bytes()
+
+
+def write_bytes_cache(feed: str, payload: bytes, suffix: str = "bin") -> None:
+    cache_path(feed, suffix).write_bytes(payload)
 
 
 def log_fetch(

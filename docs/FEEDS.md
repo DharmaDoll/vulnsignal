@@ -60,10 +60,34 @@ def get_exploits(vuln_id: str) -> list[ExploitRecord]: ...
 Rules:
 
 - All access to `db/exploit.db` must go through this adapter
+- Current implementation supports the go-exploitdb `exploits` table shape from v0.7.0 and the older local sample `cve_exploits` shape
 - Validate schema on cold start: check expected tables/columns exist
 - If schema mismatch: raise `ExploitDBSchemaError`, skip sync
-- Pin version in `config/settings.yaml` under `exploit_db.expected_schema_version`
+- Pin version in `config/settings.yaml` under `exploit_db.expected_schema_version` (currently `3`)
 - Signal type written to core.db: `exploit`
+- Local DB refresh command: `python3 -m sync.update_exploitdb`
+
+## go-exploitdb execution notes
+
+Observed workflow for the real database:
+
+1. Install a matching binary, for example `go install github.com/vulsio/go-exploitdb@v0.7.0`.
+2. Fetch the desired source into SQLite, for example `go-exploitdb fetch exploitdb --dbtype sqlite3 --dbpath db/exploit.db`.
+3. Validate the generated DB through `sync/exploit_adapter.py` before writing any signals.
+4. Import CVE-linked rows with `python3 -m sync.fetch_exploitdb --db db/exploit.db`.
+
+Observed facts from the current verification run:
+
+- `exploitdb` fetched 60,578 Offensive Security records.
+- 30,862 of those rows had CVE IDs and were importable as `exploit` signals.
+- The SQLite database exposed `exploits`, `fetch_meta`, `documents`, `ghdbs`, `git_hub_repositories`, `in_the_wilds`, `offensive_securities`, `papers`, and `shell_codes`.
+- `fetch_meta.schema_version` was `3`.
+
+Operational implications:
+
+- The adapter must treat `fetch_meta` as the schema/version anchor for current go-exploitdb builds.
+- Only CVE-linked rows are usable for this project's `vuln_id` model.
+- Routine refreshes should keep the source set small until there is a clear reason to ingest all auxiliary sources.
 
 -----
 
@@ -108,8 +132,10 @@ Rules:
 ## EPSS
 
 - Source: FIRST.org EPSS API
-- Daily bulk CSV preferred over per-CVE queries
-- Signal type: `epss`
+- Use the daily bulk gzip CSV (`https://epss.empiricalsecurity.com/epss_scores-YYYY-mm-dd.csv.gz`) instead of paginated API queries
+- Default ingestion reads all CSV rows and upserts `epss_current`; use `--limit` only for local sampling
+- `--date YYYY-MM-DD` selects the score date; default is yesterday
+- Signal type: `epss` is reserved for material EPSS events, not daily full snapshots
 
 ## GHSA
 
