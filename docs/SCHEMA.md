@@ -38,7 +38,7 @@ CREATE TABLE vulnerabilities (
 
 ### assets
 
-Known systems and workloads. Populated manually or via future ingestion.
+Known systems and workloads. Current phase expects CSV import; future ingestion can replace or supplement it.
 
 ```sql
 CREATE TABLE assets (
@@ -111,6 +111,16 @@ Signal type taxonomy:
 - `vex` — vendor not-affected / affected assertion
 - `enrichment` — supplemental metadata (Vulnrichment)
 - `ssvc_factor` — future SSVC inputs
+
+Initial feed quality metrics should stay simple:
+
+- `rows_fetched`
+- `signals_written`
+- `vuln_id_coverage`
+- `required_field_coverage`
+- `duplicate_rate`
+- `last_success_at`
+- `staleness_status`
 
 ### fetch_log
 

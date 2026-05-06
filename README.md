@@ -1,6 +1,10 @@
 # vulnsignal
 Lean AI-Native Vulnerability Intelligence Platform
 
+Current feed priority: KEV, EPSS, GHSA, Trivy JSON, Vulnrichment, go-exploitdb. NVD is optional enrichment in the current phase.
+
+Current implementation plan: `docs/ROADMAP.md`
+
 
 ```
 project/

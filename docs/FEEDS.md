@@ -5,12 +5,13 @@
 |Feed        |Frequency|Max staleness|On exceeded      |
 |------------|---------|-------------|-----------------|
 |KEV         |hourly   |3h           |Alert + use cache|
-|NVD         |every 6h |24h          |Alert + use cache|
 |EPSS        |daily    |48h          |Warn + use cache |
+|GHSA        |every 6h |24h          |Warn + use cache |
 |Trivy DB    |every 6h |24h          |Warn + use cache |
 |go-exploitdb|every 6h |48h          |Warn + use cache |
 |VEX/CSAF    |every 12h|48h          |Warn + use cache |
 |Vulnrichment|every 12h|48h          |Warn + use cache |
+|NVD         |optional |24h          |Warn + use cache |
 
 ## Fetch failure policy
 
@@ -23,7 +24,9 @@
 
 ### CVSS / severity
 
-Priority (highest wins): NVD → Vulnrichment → Trivy DB → internal override (future)
+Initial priority (highest wins): GHSA → Vulnrichment → Trivy JSON → feed-provided severity.
+
+NVD is optional enrichment in the current phase. If enabled later, use it as a canonical CVE reference without blocking ingestion from the core feeds.
 
 Never overwrite a higher-trust value. Store all values as signals; `vulnerabilities.cvss_score` reflects highest-trust available.
 
@@ -34,6 +37,7 @@ OR logic: if **any** feed reports an exploit, `has_exploit = true`. Record provi
 ### VEX not-affected
 
 A vendor’s `not_affected` assertion overrides all CVE-level signals regardless of CVSS or KEV status.
+In ranking APIs, `not_affected` records are excluded rather than merely downweighted.
 
 -----
 
@@ -85,20 +89,15 @@ def get_advisories_by_package(ecosystem: str, package: str, version: str) -> lis
 
 Rules:
 
-- Use `trivy db download` to fetch DB — never parse scan output JSON
+- Current phase: ingest Trivy advisory JSON first to validate field coverage and fixed-version quality.
+- Later phase: use `trivy db download` for direct DB-backed ingestion only after the JSON path has proven insufficient.
+- Never parse Trivy scan output JSON as the source of advisory truth.
 - Validate Trivy DB schema version on cold start
 - If schema mismatch: raise `TrivyDBSchemaError`, skip sync
 - Pin version in `config/settings.yaml` under `trivy_db.expected_schema_version`
 - Signal type written to core.db: `package_advisory` (distinct from `exploit`)
 
 -----
-
-## NVD
-
-- Use REST API v2.0 with incremental updates (`lastModStartDate` / `lastModEndDate`)
-- Requires API key (`config/settings.yaml` → `nvd.api_key`)
-- Rate limit: 5 req/30s without key, 50 req/30s with key — respect headers
-- Signal type: `enrichment`
 
 ## KEV
 
@@ -112,6 +111,22 @@ Rules:
 - Daily bulk CSV preferred over per-CVE queries
 - Signal type: `epss`
 
+## GHSA
+
+- Source: GitHub Global Security Advisories API or `github/advisory-database`
+- Current phase: ingest reviewed advisories first
+- Signal types:
+  - `package_advisory` for ecosystem, package, affected range, fixed version
+  - `enrichment` for severity, CVSS, CWE, summary
+- GHSA-only advisories are valid `vuln_id` values when no CVE exists.
+
+## NVD
+
+- Optional enrichment feed in the current phase
+- Use REST API v2.0 with incremental updates (`lastModStartDate` / `lastModEndDate`) if enabled
+- Requires API key (`config/settings.yaml` → `nvd.api_key`) for reliable throughput
+- Signal type: `enrichment`
+
 ## VEX / CSAF / OpenVEX
 
 - Per-vendor CSAF feeds or OpenVEX documents
@@ -122,3 +137,9 @@ Rules:
 
 - Source: CISA Vulnrichment GitHub repository
 - Signal type: `enrichment`
+
+## Local feed quality
+
+- Command: `python3 -m sync.feed_quality`
+- Reads only `core.db`
+- Reports simple per-feed metrics for early data-quality assessment

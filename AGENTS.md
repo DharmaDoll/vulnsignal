@@ -1,10 +1,11 @@
 ## What this project is
 
-Lean vulnerability intelligence platform. Ingests external feeds (NVD, KEV, EPSS, Trivy DB, go-exploitdb, VEX, Vulnrichment), normalizes them into signals, and produces risk-scored remediation priorities.
+Lean vulnerability intelligence platform. Ingests external feeds (KEV, EPSS, GHSA, Trivy JSON/DB, go-exploitdb, VEX, Vulnrichment, optional NVD), normalizes them into signals, and produces risk-scored remediation priorities.
 
 **Not a scanner. Not a CMDB. A signal aggregation + decision engine.**
 
 Full architecture: `docs/ARCHITECTURE.md`
+Current task plan: `docs/ROADMAP.md`
 
 ---
 
@@ -35,9 +36,10 @@ project/
 │   ├── scoring.py             ← scoring engine
 │   └── scheduler.py           ← cron/job runner
 ├── sync/
-│   ├── fetch_nvd.py
 │   ├── fetch_kev.py
 │   ├── fetch_epss.py
+│   ├── fetch_ghsa.py
+│   ├── fetch_nvd.py            ← optional enrichment
 │   ├── fetch_trivy.py
 │   ├── fetch_vex.py
 │   ├── fetch_vulnrichment.py
@@ -59,12 +61,13 @@ project/
 ## Build order for new implementations
 
 1. `sql/migrations/001_initial_schema.sql` + `db/migrate.py`
-2. `sync/exploit_adapter.py` and `sync/trivy_adapter.py`
-3. Fetch jobs — each with retry/backoff + `fetch_log` writes
-4. `app/scoring.py` — implement v1 formula from `docs/SCORING.md`
-5. `app/skills.py` + `app/api.py` — FastAPI Skills API
-6. Tests
-7. `data_freshness()` endpoint
+2. Core fetch jobs — KEV, EPSS, GHSA — each with retry/backoff + `fetch_log` writes
+3. `sync/exploit_adapter.py` and `sync/trivy_adapter.py`
+4. Trivy JSON importer before direct DB ingestion
+5. `app/scoring.py` — implement v1 formula from `docs/SCORING.md`
+6. `app/skills.py` + `app/api.py` — FastAPI Skills API
+7. Tests
+8. `data_freshness()` endpoint
 
 ---
 

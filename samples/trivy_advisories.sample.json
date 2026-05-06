@@ -1,0 +1,18 @@
+[
+  {
+    "VulnerabilityID": "CVE-2024-0001",
+    "PkgName": "openssl",
+    "FixedVersion": "3.0.13-r0",
+    "Severity": "HIGH",
+    "Title": "Sample OpenSSL vulnerability",
+    "Description": "Synthetic sample for importer verification."
+  },
+  {
+    "ecosystem": "npm",
+    "package_name": "example-package",
+    "vuln_id": "GHSA-2345-2345-2345",
+    "affected_versions": ["< 1.2.3"],
+    "fixed_version": "1.2.3",
+    "severity": "medium"
+  }
+]

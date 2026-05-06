@@ -1,0 +1,23 @@
+nvd:
+  enabled: false
+  api_key: null
+
+ghsa:
+  enabled: true
+  type: reviewed
+
+trivy:
+  enabled: true
+  source: json
+
+feeds:
+  kev:
+    enabled: true
+  epss:
+    enabled: true
+  vulnrichment:
+    enabled: true
+  go_exploitdb:
+    enabled: true
+  vex:
+    enabled: false
