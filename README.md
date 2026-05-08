@@ -38,93 +38,15 @@ project/
 ```
 
 
-Trivy DB をそのまま core.db に混ぜ込むのではなく、構造を理解して必要情報だけ signals / vulnerabilities に正規化して取り込むのが正解です。
-Trivy DBはそのまま保存する対象ではない。知識源として抽出・翻訳して使う対象です。
+Trivy は advisory JSON と compiled DB の両方を扱えます。
+JSON は package advisory の入力として使い、compiled DB は vulnerability metadata の enrichment に使います。
+取得手順とローカル cache の要件は [docs/FEEDS.md](/home/calvet/git/vulnsignal/docs/FEEDS.md) を参照してください。
 
-1. Trivy DBとは何か
-Trivy は内部で脆弱性DBを持っています。
-主な用途：
-	•	OS package advisory
-	•	Language package advisory
-	•	CVEとパッケージの紐付け
-	•	fixed version 情報
+直読みの実行例:
 
-これは NVDより実運用寄りデータ です。
-
-⸻
-
-2. そのまま統合しない理由
-理由は3つ。
-① 内部構造がTrivy都合
-Trivy用に最適化されているため：
-
-③ 目的は判断基盤
-必要なのは全内部構造ではなく：
-	•	このCVEは何に効くか
-	•	fixed versionは何か
-	•	このassetに影響あるか
-
-です。
-
-⸻
-
-3. 現実的な抽出方法（重要）
-
-```
-trivy --download-db-only
+```bash
+python3 -m sync.fetch_trivy_db --db-dir db/trivy_cache.db
 ```
 
-Trivy内部DB形式を直接読むより、Trivyが持つ advisory JSON を利用する方が安全です。
-Trivy repo / advisory sources を JSON取得
-
-次にやるべき実装（超重要）
-Trivyの実DB形式から直接抽出するコード
-ecosystem別 version comparator 実装
-
-
-```python
-import sqlite3
-import json
-
-DB = "core.db"
-
-conn = sqlite3.connect(DB)
-cur = conn.cursor()
-
-with open("trivy_advisories.json") as f:
-    advisories = json.load(f)
-
-for item in advisories:
-    vuln_id = item["VulnerabilityID"]
-    pkg = item["PkgName"]
-    fixed = item.get("FixedVersion")
-    severity = item.get("Severity", "UNKNOWN")
-
-    # InstalledVersion をそのまま条件として使わず、
-    # advisory由来の affected range があればそちら優先
-    affected = "< " + fixed if fixed else None
-
-    cur.execute("""
-        INSERT INTO package_impacts (
-            vuln_id,
-            ecosystem,
-            package_name,
-            affected_constraint,
-            fixed_version,
-            severity,
-            provider
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (
-        vuln_id,
-        "linux",
-        pkg,
-        affected,
-        fixed,
-        severity,
-        "Trivy"
-    ))
-
-conn.commit()
-conn.close()
-
-```
+`db/trivy_cache.db` には `trivy.db` と `metadata.json` が必要です。
+`sync/fetch_trivy_db.py` が `vulnerability` を正規化して `enrichment` signals に落とします。

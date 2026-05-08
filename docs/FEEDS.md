@@ -97,29 +97,100 @@ File: `sync/trivy_adapter.py`
 
 ```python
 @dataclass
-class AdvisoryRecord:
+class VulnerabilityRecord:
     vuln_id: str
     source: str               # "trivy-db"
-    ecosystem: str            # "pypi" | "npm" | "go" | "debian" | ...
-    package_name: str
-    affected_versions: list[str]
-    fixed_version: str | None
+    title: str | None
+    summary: str | None
     severity: str | None
+    cvss_score: float | None
+    cvss_vector: str | None
+    vendor_severity: dict[str, Any] | None
+    references: list[str]
     observed_at: str          # ISO8601
 
-def get_advisories(vuln_id: str) -> list[AdvisoryRecord]: ...
-def get_advisories_by_package(ecosystem: str, package: str, version: str) -> list[AdvisoryRecord]: ...
+def get_vulnerabilities(vuln_id: str) -> list[VulnerabilityRecord]: ...
+def get_vulnerabilities_from_db(db_dir: Path) -> list[VulnerabilityRecord]: ...
 ```
 
 Rules:
 
-- Current phase: ingest Trivy advisory JSON first to validate field coverage and fixed-version quality.
-- Later phase: use `trivy db download` for direct DB-backed ingestion only after the JSON path has proven insufficient.
+- Current phase: support both Trivy advisory JSON and direct Trivy DB ingestion.
+- JSON remains useful for field-coverage checks and fixture-based validation.
+- Direct Trivy DB ingestion currently yields vulnerability metadata enrichment, not package ranges.
 - Never parse Trivy scan output JSON as the source of advisory truth.
 - Validate Trivy DB schema version on cold start
 - If schema mismatch: raise `TrivyDBSchemaError`, skip sync
 - Pin version in `config/settings.yaml` under `trivy_db.expected_schema_version`
-- Signal type written to core.db: `package_advisory` (distinct from `exploit`)
+- Signal type written to core.db: `enrichment` (distinct from `exploit`)
+
+## Trivy DB execution notes
+
+Use the compiled Trivy DB cache when you want vulnerability metadata directly from Trivy's DB.
+
+Current command:
+
+```bash
+python3 -m sync.fetch_trivy_db --db-dir db/trivy_cache.db
+```
+
+Operational notes:
+
+- `--db-dir` must point to a local directory that contains `trivy.db` and `metadata.json`.
+- The repository does not store the Trivy DB itself; the command reads a local cache or an extracted download.
+- `metadata.json.Version` is the schema/version gate.
+- The adapter extracts vulnerability metadata from `vulnerability` and writes `enrichment` signals.
+- The output signal type remains `enrichment`.
+
+### How to obtain the DB
+
+Two supported ways to get a usable cache directory:
+
+1. Trivy managed download:
+
+```bash
+TRIVY_TEMP_DIR=$(mktemp -d)
+trivy --cache-dir "$TRIVY_TEMP_DIR" image --download-db-only
+mkdir -p db/trivy_cache.db
+cp "$TRIVY_TEMP_DIR/db/trivy.db" db/trivy_cache.db/
+cp "$TRIVY_TEMP_DIR/db/metadata.json" db/trivy_cache.db/
+rm -rf "$TRIVY_TEMP_DIR"
+```
+
+2. ORAS pull from GHCR:
+
+```bash
+oras pull ghcr.io/aquasecurity/trivy-db:2
+```
+
+After pulling with ORAS, copy or extract the resulting `trivy.db` and `metadata.json` into the cache directory you pass to `--db-dir`.
+
+## Trivy vuln-list execution notes
+
+Use the raw advisory tree from `aquasecurity/vuln-list` as the first ingestion step.
+
+Current command:
+
+```bash
+python3 -m sync.fetch_trivy_vuln_list --source-dir /path/to/vuln-list
+```
+
+Default targets:
+
+- `alpine`
+- `debian`
+- `ubuntu`
+- `ghsa`
+- `glad`
+- `go`
+- `osv`
+
+Operational notes:
+
+- The fetcher reads local checkout or unpacked archive content only.
+- All Trivy-shaped normalization stays in `sync/trivy_adapter.py`.
+- The output signal type remains `package_advisory`.
+- The Trivy DB path stays reserved for vulnerability metadata enrichment and scanner-aligned CVSS/severity context.
 
 -----
 

@@ -121,9 +121,9 @@ Signal type taxonomy:
 - `epss` — EPSS probability score
 - `kev` — CISA KEV listing
 - `exploit` — PoC/exploit presence (from go-exploitdb)
-- `package_advisory` — package-level affected range (from Trivy DB)
+- `package_advisory` — package-level affected range (from Trivy JSON/vuln-list)
 - `vex` — vendor not-affected / affected assertion
-- `enrichment` — supplemental metadata (Vulnrichment)
+- `enrichment` — supplemental metadata (Vulnrichment, Trivy DB vulnerability metadata)
 - `ssvc_factor` — future SSVC inputs
 
 Initial feed quality metrics should stay simple:

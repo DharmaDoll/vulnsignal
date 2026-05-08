@@ -23,7 +23,7 @@ External Feeds
  ├ KEV          — known exploited vulnerabilities
  ├ EPSS         — exploit probability scores
  ├ GHSA         — OSS package advisories and GHSA-only IDs
- ├ Trivy DB     — package/ecosystem advisory mapping
+ ├ Trivy DB     — vulnerability metadata enrichment
  ├ go-exploitdb — PoC/exploit presence and maturity
  ├ VEX/CSAF     — vendor not-affected assertions
  └ Vulnrichment — supplemental enrichment

@@ -10,6 +10,11 @@ trivy:
   enabled: true
   source: json
 
+trivy_db:
+  enabled: true
+  path: db/trivy_cache.db
+  expected_schema_version: 2
+
 feeds:
   kev:
     enabled: true

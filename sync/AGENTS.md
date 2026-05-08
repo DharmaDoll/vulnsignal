@@ -22,6 +22,7 @@ You are working inside the feed ingestion layer.
 See `docs/FEEDS.md` for:
 
 - `ExploitRecord` dataclass definition
-- `AdvisoryRecord` dataclass definition
+- `AdvisoryRecord` dataclass definition for Trivy JSON / vuln-list
+- `VulnerabilityRecord` dataclass definition for Trivy DB enrichment
 - Expected schema version config keys
-- Signal type taxonomy (`exploit` vs `package_advisory`)
+- Signal type taxonomy (`exploit`, `package_advisory`, `enrichment`)

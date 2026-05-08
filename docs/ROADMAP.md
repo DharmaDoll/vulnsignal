@@ -8,7 +8,7 @@ Key decisions:
 
 - NVD is optional enrichment, not a blocker for MVP ingestion.
 - GHSA is a core feed.
-- Trivy starts from advisory JSON. Direct DB ingestion is a later option.
+- Trivy supports advisory JSON and direct DB ingestion.
 - VEX `not_affected` excludes items from rankings.
 - Assets are expected to start as CSV import, with the exact format still open.
 - Feed quality should be judged with simple per-feed metrics and a combined operational assessment.
@@ -23,11 +23,13 @@ Key decisions:
 |Done|EPSS bulk CSV ingestion|EPSS fetcher reads FIRST bulk CSV and upserts `epss_current`|
 |Done|GHSA sample ingestion|Small GHSA fetch writes `enrichment` and `package_advisory` signals|
 |Done|Trivy JSON importer|Sample advisory JSON produces `package_advisory` signals through `sync/trivy_adapter.py`|
+|Done|Trivy DB importer|Compiled Trivy DB produces `enrichment` signals through `sync/trivy_adapter.py`|
 |Done|Feed quality summary|A local command reports simple feed metrics from `core.db`|
 |Done|go-exploitdb adapter|All go-exploitdb access goes through `sync/exploit_adapter.py` with schema validation|
 |Done|go-exploitdb sample ingestion|Sample import writes `exploit` signals and records source URL/type when available|
 |Done|go-exploitdb refresh wrapper|Local command wraps `go-exploitdb fetch` and validates resulting SQLite schema|
-|Next|Trivy vuln-list fetcher|Fetch selected JSON trees from `aquasecurity/vuln-list` and pass them through `sync/trivy_adapter.py`|
+|Done|Trivy vuln-list fetcher|Fetch selected JSON trees from `aquasecurity/vuln-list` and pass them through `sync/trivy_adapter.py`|
+|Next|GHSA pagination fix|Remove the sample-style row cap and fetch GHSA through full pagination or incremental updates|
 |Planned|Vulnrichment ingestion|Sample import writes severity/CVSS/summary enrichment without overwriting higher-trust data|
 |Planned|Asset CSV importer|CSV import creates or updates `assets` with conservative defaults|
 |Planned|Minimal scoring/ranking|v1 scoring works from latest signals and ranking excludes VEX `not_affected`|
@@ -53,26 +55,28 @@ High-volume current-state feeds should not append every row to `signals`. EPSS u
 
 ## Trivy Data Acquisition Plan
 
-Use Trivy source data in two phases:
+Trivy source data is available through two paths:
 
-1. Fetch raw advisory JSON from `aquasecurity/vuln-list`.
-2. Consider compiled Trivy DB v2 ingestion only if raw JSON is insufficient.
+1. Raw advisory JSON from `aquasecurity/vuln-list`.
+2. Compiled Trivy DB cache for direct vendor-normalized lookup.
 
-The next implementation should add a `vuln-list` fetcher that:
+Current implementation:
 
-- reads from a local checkout or downloaded archive of `aquasecurity/vuln-list`
-- starts with selected targets only: `alpine`, `debian`, `ubuntu`, `ghsa`, `glad`, `go`, and `osv`
+- reads from a local checkout or unpacked archive of `aquasecurity/vuln-list`
+- reads from a local Trivy DB cache directory containing `trivy.db` and `metadata.json`
+- starts with selected JSON targets only: `alpine`, `debian`, `ubuntu`, `ghsa`, `glad`, `go`, and `osv`
 - sends all Trivy-shaped data through `sync/trivy_adapter.py`
-- writes only normalized `package_advisory` signals to `core.db`
+- writes package advisory signals from Trivy JSON/vuln-list and vulnerability enrichment from Trivy DB to `core.db`
 - reports field coverage for `ecosystem`, `package_name`, `affected_versions`, and `fixed_version`
+- the local DB acquisition steps are documented in `docs/FEEDS.md`
 
-Compiled DB ingestion is intentionally later because it requires schema inspection and validation. If added, all direct DB access must stay inside `sync/trivy_adapter.py`.
+All direct DB access stays inside `sync/trivy_adapter.py` and the dedicated Trivy DB dump helper under `cmd/trivydbdump/`.
 
 ## Open Questions
 
 - Exact asset CSV columns and required fields.
 - Whether GHSA `unreviewed` advisories should be included after reviewed advisories are stable.
-- Whether Trivy `vuln-list` should be fetched by git clone, GitHub archive download, or a pinned local path.
+- Whether GHSA should be fetched as full pagination or updated incrementally by `updated_at`.
 - Whether to run all go-exploitdb sources by default or keep a smaller source set for routine refresh.
 - Whether internal override should eventually become the highest-trust severity source.
 
