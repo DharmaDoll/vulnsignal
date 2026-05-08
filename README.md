@@ -5,6 +5,20 @@ Current feed priority: KEV, EPSS, GHSA, Trivy JSON, Vulnrichment, go-exploitdb. 
 
 Current implementation plan: `docs/ROADMAP.md`
 
+Git pre-commit secret scanning:
+
+```bash
+./scripts/install-git-hooks.sh
+```
+
+This enables the repo-managed `.githooks/pre-commit` hook, which runs `gitleaks` on staged changes.
+
+Install `gitleaks` first. Common options:
+
+- macOS: `brew install gitleaks`
+- Linux: use your package manager if available, or download the binary from the `gitleaks` releases page
+- Go install: `go install github.com/gitleaks/gitleaks/v8@latest`
+
 go-exploitdb execution path:
 
 1. Install a matching binary, for example `go install github.com/vulsio/go-exploitdb@v0.7.0`.

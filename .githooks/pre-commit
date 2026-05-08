@@ -1,0 +1,15 @@
+#!/usr/bin/env sh
+set -eu
+
+gitleaks_bin="$(command -v gitleaks || true)"
+if [ -z "$gitleaks_bin" ] && command -v go >/dev/null 2>&1; then
+  gitleaks_bin="$(go env GOPATH)/bin/gitleaks"
+fi
+
+if [ ! -x "$gitleaks_bin" ]; then
+  echo "gitleaks is required for this pre-commit hook."
+  echo "Install gitleaks and re-run the commit, or use --no-verify to bypass the hook."
+  exit 1
+fi
+
+exec "$gitleaks_bin" protect --staged --redact --no-banner
