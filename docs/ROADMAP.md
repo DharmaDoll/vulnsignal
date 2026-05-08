@@ -70,6 +70,12 @@ Current implementation:
 - reports field coverage for `ecosystem`, `package_name`, `affected_versions`, and `fixed_version`
 - the local DB acquisition steps are documented in `docs/FEEDS.md`
 
+Day 1 interpretation:
+
+- `vuln-list` is optional unless package-range fidelity becomes the bottleneck.
+- If the main job is to match against existing assets, Trivy JSON and other scanner-aligned feeds can be enough to start.
+- Keep `vuln-list` as a quality-improvement path rather than a blocker for the first usable asset-to-vulnerability workflow.
+
 All direct DB access stays inside `sync/trivy_adapter.py` and the dedicated Trivy DB dump helper under `cmd/trivydbdump/`.
 
 ## Open Questions

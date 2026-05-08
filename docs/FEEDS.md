@@ -192,6 +192,12 @@ Operational notes:
 - The output signal type remains `package_advisory`.
 - The Trivy DB path stays reserved for vulnerability metadata enrichment and scanner-aligned CVSS/severity context.
 
+Day 1 note:
+
+- `vuln-list` is useful when we want to improve package-range quality and test coverage, but it is not required to start asset matching.
+- If the immediate goal is to join against existing asset inventories, the current Trivy JSON path and scanner-aligned sources are usually enough.
+- A `vuln-list` sync can be added later if package coverage or fixed-version fidelity becomes the limiting factor.
+
 -----
 
 ## KEV
