@@ -1,11 +1,12 @@
------
-
-## name: api
+---
+name: api
 description: >
-Use when implementing or modifying the FastAPI Skills API (app/api.py, app/skills.py).
-Triggers on: “implement API”, “add endpoint”, “Skills API”, “find_vuln”, “top_risks”,
-“has_exploit”, “affected_assets”, “recommend_patch_queue”, “explain_asset_risk”,
-“data_freshness”, “FastAPI”, “skills.py”.
+  Use when implementing or modifying the FastAPI Skills API (app/api.py,
+  app/skills.py).
+  Triggers on: “implement API”, “add endpoint”, “Skills API”, “find_vuln”,
+  “top_risks”, “has_exploit”, “affected_assets”, “recommend_patch_queue”,
+  “explain_asset_risk”, “data_freshness”, “FastAPI”, “skills.py”.
+---
 
 # Skill: api
 

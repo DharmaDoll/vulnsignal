@@ -1,0 +1,35 @@
+{
+  "id": "OSV-2024-0001",
+  "aliases": [
+    "CVE-2024-2222"
+  ],
+  "summary": "Sample OSV advisory",
+  "details": "Synthetic OSV advisory for vuln-list importer verification.",
+  "affected": [
+    {
+      "package": {
+        "ecosystem": "go",
+        "name": "example.com/sample"
+      },
+      "ranges": [
+        {
+          "type": "SEMVER",
+          "events": [
+            {
+              "introduced": "0"
+            },
+            {
+              "fixed": "2.0.0"
+            }
+          ]
+        }
+      ],
+      "severity": [
+        {
+          "type": "CVSS_V3",
+          "score": "7.5"
+        }
+      ]
+    }
+  ]
+}

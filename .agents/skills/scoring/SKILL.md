@@ -1,12 +1,12 @@
------
-
-## name: scoring
+---
+name: scoring
 description: >
-Use when implementing or modifying the risk scoring engine (app/scoring.py),
-changing score weights or components, adding new signal types to scoring logic,
-or debugging why a CVE’s score looks wrong.
-Triggers on: “implement scoring”, “fix score”, “add scoring component”,
-“why is this score X”, “scoring formula”, “risk_score”, “scoring_version”.
+  Use when implementing or modifying the risk scoring engine (app/scoring.py),
+  changing score weights or components, adding new signal types to scoring
+  logic, or debugging why a CVE’s score looks wrong.
+  Triggers on: “implement scoring”, “fix score”, “add scoring component”,
+  “why is this score X”, “scoring formula”, “risk_score”, “scoring_version”.
+---
 
 # Skill: scoring
 

@@ -1,12 +1,13 @@
------
-
-## name: schema
+---
+name: schema
 description: >
-Use when creating or modifying database schema, writing migration files,
-working with db/migrate.py, adding tables or columns, adding indexes,
-or debugging schema-related errors.
-Triggers on: “add table”, “create migration”, “modify schema”, “add column”,
-“add index”, “PRAGMA user_version”, “migrate.py”, “schema.sql”, “migrations/”.
+  Use when creating or modifying database schema, writing migration files,
+  working with db/migrate.py, adding tables or columns, adding indexes,
+  or debugging schema-related errors.
+  Triggers on: “add table”, “create migration”, “modify schema”, “add column”,
+  “add index”, “PRAGMA user_version”, “migrate.py”, “schema.sql”,
+  “migrations/”.
+---
 
 # Skill: schema
 

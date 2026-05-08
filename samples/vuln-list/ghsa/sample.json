@@ -1,0 +1,19 @@
+{
+  "ghsa_id": "GHSA-aaaa-bbbb-cccc",
+  "cve_id": "CVE-2024-1111",
+  "summary": "Sample GHSA advisory",
+  "description": "Synthetic GHSA advisory for vuln-list importer verification.",
+  "severity": "high",
+  "vulnerabilities": [
+    {
+      "package": {
+        "ecosystem": "npm",
+        "name": "sample-package"
+      },
+      "vulnerable_version_range": "< 1.2.3",
+      "first_patched_version": {
+        "identifier": "1.2.3"
+      }
+    }
+  ]
+}
