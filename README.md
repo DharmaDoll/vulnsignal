@@ -3,6 +3,10 @@ Lean AI-Native Vulnerability Intelligence Platform
 
 Current feed priority: KEV, EPSS, GHSA, Trivy JSON, Vulnrichment, go-exploitdb. NVD is optional enrichment in the current phase.
 
+GHSA, Trivy vuln-list, and Vulnrichment are all operated from local git mirrors under `data/`.
+For core.db ingestion, only keep records published in 2015 or later.
+Refresh those mirrors with `./scripts/update_data_mirrors.sh`.
+
 Current implementation plan: `docs/ROADMAP.md`
 
 Git pre-commit secret scanning:
@@ -12,6 +16,7 @@ Git pre-commit secret scanning:
 ```
 
 This enables the repo-managed `.githooks/pre-commit` hook, which runs `gitleaks` on staged changes.
+Run this once after cloning the repo to enable the hook in your local Git config.
 
 Install `gitleaks` first. Common options:
 
@@ -25,6 +30,26 @@ go-exploitdb execution path:
 2. Fetch SQLite data, for example `go-exploitdb fetch exploitdb --dbtype sqlite3 --dbpath db/exploit.db`.
 3. Validate the generated DB through `sync/exploit_adapter.py`.
 4. Import CVE-linked rows with `python3 -m sync.fetch_exploitdb --db db/exploit.db`.
+
+GHSA execution path:
+
+1. Mirror `github/advisory-database` locally with `git clone https://github.com/github/advisory-database data/github-advisory-database-mirror`.
+2. Refresh that mirror with `git -C data/github-advisory-database-mirror pull --ff-only`.
+3. Ingest the reviewed advisory tree with `python3 -m sync.fetch_ghsa --source-dir data/github-advisory-database-mirror`.
+4. Use `--include-unreviewed` only if you want the extra advisory set.
+
+Trivy vuln-list execution path:
+
+1. Mirror `aquasecurity/vuln-list` locally with `git clone https://github.com/aquasecurity/vuln-list data/aquasecurity-vuln-list-mirror`.
+2. Refresh that mirror with `git -C data/aquasecurity-vuln-list-mirror pull --ff-only`.
+3. Ingest the local JSON tree with `python3 -m sync.fetch_trivy_vuln_list --source-dir data/aquasecurity-vuln-list-mirror`.
+
+Vulnrichment execution path:
+
+1. Mirror the CISA Vulnrichment repository locally, for example `git clone https://github.com/cisagov/vulnrichment data/vulnrichment-mirror`.
+2. Refresh that mirror with `git -C data/vulnrichment-mirror pull --ff-only`.
+3. Ingest the local JSON tree with `python3 -m sync.fetch_vulnrichment --source-dir data/vulnrichment-mirror`.
+4. Use `--dry-run` first if you want to verify the local file tree before writing signals.
 
 Observed in this project:
 

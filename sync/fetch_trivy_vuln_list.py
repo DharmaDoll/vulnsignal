@@ -4,13 +4,43 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from sync.common import FetchResult, append_signal, connect, log_fetch, upsert_vulnerability, utc_now
+from sync.common import ROOT, FetchResult, append_signal, connect, log_fetch, upsert_vulnerability, utc_now
 from sync.trivy_adapter import load_advisories_from_directory
 
 
 FEED = "trivy_vuln_list"
 PROVIDER = "Trivy vuln-list"
 DEFAULT_TARGETS = ("alpine", "debian", "ubuntu", "ghsa", "glad", "go", "osv")
+DEFAULT_SOURCE_DIR = ROOT / "data" / "aquasecurity-vuln-list-mirror"
+MIN_YEAR = 2015
+
+
+def _year_from_iso(value: str | None) -> int | None:
+    if not value or len(value) < 4:
+        return None
+    try:
+        return int(value[:4])
+    except ValueError:
+        return None
+
+
+def _vuln_year(vuln_id: str | None) -> int | None:
+    if not vuln_id or not vuln_id.startswith("CVE-"):
+        return None
+    parts = vuln_id.split("-")
+    if len(parts) < 3:
+        return None
+    try:
+        return int(parts[1])
+    except ValueError:
+        return None
+
+
+def _keep_for_core_db(advisory) -> bool:
+    year = _year_from_iso(advisory.published_at)
+    if year is not None:
+        return year >= MIN_YEAR
+    return (_vuln_year(advisory.vuln_id) or MIN_YEAR) >= MIN_YEAR
 
 
 def sync(
@@ -35,6 +65,8 @@ def sync(
 
         conn = connect()
         for advisory in advisories:
+            if not _keep_for_core_db(advisory):
+                continue
             upsert_vulnerability(
                 conn,
                 vuln_id=advisory.vuln_id,
@@ -78,7 +110,12 @@ def sync(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source-dir", required=True, type=Path, help="Path to a local trivy/vuln-list checkout or unpacked archive.")
+    parser.add_argument(
+        "--source-dir",
+        type=Path,
+        default=DEFAULT_SOURCE_DIR,
+        help="Path to a local trivy/vuln-list checkout or unpacked archive.",
+    )
     parser.add_argument("--target", action="append", choices=DEFAULT_TARGETS, help="Limit to one target directory. Can be repeated.")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--dry-run", action="store_true")

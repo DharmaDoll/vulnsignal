@@ -168,11 +168,19 @@ After pulling with ORAS, copy or extract the resulting `trivy.db` and `metadata.
 ## Trivy vuln-list execution notes
 
 Use the raw advisory tree from `aquasecurity/vuln-list` as the first ingestion step.
+When writing to `core.db`, keep only records published in 2015 or later.
 
 Current command:
 
 ```bash
-python3 -m sync.fetch_trivy_vuln_list --source-dir /path/to/vuln-list
+python3 -m sync.fetch_trivy_vuln_list --source-dir data/aquasecurity-vuln-list-mirror
+```
+
+Recommended mirror setup:
+
+```bash
+git clone https://github.com/aquasecurity/vuln-list data/aquasecurity-vuln-list-mirror
+git -C data/aquasecurity-vuln-list-mirror pull --ff-only
 ```
 
 Default targets:
@@ -216,12 +224,25 @@ Day 1 note:
 
 ## GHSA
 
-- Source: GitHub Global Security Advisories API or `github/advisory-database`
+- Source: `github/advisory-database`
 - Current phase: ingest reviewed advisories first
 - Signal types:
   - `package_advisory` for ecosystem, package, affected range, fixed version
   - `enrichment` for severity, CVSS, CWE, summary
 - GHSA-only advisories are valid `vuln_id` values when no CVE exists.
+- When writing to `core.db`, keep only records published in 2015 or later.
+
+### Production operation
+
+Mirror the advisory database locally and ingest the reviewed tree.
+
+```bash
+git clone https://github.com/github/advisory-database data/github-advisory-database-mirror
+git -C data/github-advisory-database-mirror pull --ff-only
+python3 -m sync.fetch_ghsa --source-dir data/github-advisory-database-mirror
+```
+
+The default fetcher path reads `advisories/github-reviewed` under that mirror. Pass `--include-unreviewed` only if you intentionally want the extra advisories.
 
 ## NVD
 
@@ -240,6 +261,57 @@ Day 1 note:
 
 - Source: CISA Vulnrichment GitHub repository
 - Signal type: `enrichment`
+- When writing to `core.db`, keep only records published in 2015 or later.
+
+### Production operation
+
+Keep a local mirror of the upstream repository or an unpacked archive, then point the fetcher at that local tree.
+
+Recommended layout:
+
+```text
+data/vulnrichment/
+  2024/0xxx/CVE-2024-0043.json
+  2024/1xxx/...
+  2025/...
+```
+
+Initial mirror setup:
+
+```bash
+git clone https://github.com/cisagov/vulnrichment data/vulnrichment-mirror
+```
+
+Or update all mirrors at once:
+
+```bash
+./scripts/update_data_mirrors.sh
+```
+
+Routine update:
+
+```bash
+git -C data/vulnrichment-mirror pull --ff-only
+```
+
+Local ingestion:
+
+```bash
+python3 -m sync.fetch_vulnrichment --source-dir data/vulnrichment-mirror
+```
+
+Recommended operational sequence:
+
+1. Refresh the local mirror.
+2. Run a dry run if you want to check file coverage first: `python3 -m sync.fetch_vulnrichment --source-dir data/vulnrichment-mirror --dry-run`
+3. Run the real ingest command.
+4. Review `fetch_log` and feed-quality output after the run.
+
+Notes:
+
+- The fetcher reads local JSON only; it does not talk to GitHub directly.
+- `--source-dir` may also point at an unpacked archive export if you do not want a git checkout.
+- Keep the local mirror on disk and update it by git pull or archive replacement, not by per-file manual downloads.
 
 ## Local feed quality
 

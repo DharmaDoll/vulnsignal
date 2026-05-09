@@ -29,10 +29,10 @@ Key decisions:
 |Done|go-exploitdb sample ingestion|Sample import writes `exploit` signals and records source URL/type when available|
 |Done|go-exploitdb refresh wrapper|Local command wraps `go-exploitdb fetch` and validates resulting SQLite schema|
 |Done|Trivy vuln-list fetcher|Fetch selected JSON trees from `aquasecurity/vuln-list` and pass them through `sync/trivy_adapter.py`|
-|Next|GHSA pagination fix|Remove the sample-style row cap and fetch GHSA through full pagination or incremental updates|
-|Planned|Vulnrichment ingestion|Sample import writes severity/CVSS/summary enrichment without overwriting higher-trust data|
+|Done|GHSA pagination fix|Remove the sample-style row cap and fetch GHSA through full pagination or incremental updates|
+|Done|Vulnrichment ingestion|Sample import writes severity/CVSS/summary enrichment without overwriting higher-trust data|
 |Planned|Asset CSV importer|CSV import creates or updates `assets` with conservative defaults|
-|Planned|Minimal scoring/ranking|v1 scoring works from latest signals and ranking excludes VEX `not_affected`|
+|Done|Minimal scoring/ranking|v1 scoring works from latest signals and ranking excludes VEX `not_affected`|
 |Planned|Minimal Skills API|`find_vuln`, `top_risks`, `has_exploit`, and `data_freshness` work from local DB|
 
 ## Simple Feed Quality Metrics

@@ -31,6 +31,8 @@ class AdvisoryRecord:
     fixed_version: str | None
     severity: str | None
     observed_at: str
+    published_at: str | None = None
+    source_path: str | None = None
     title: str | None = None
     summary: str | None = None
 
@@ -259,6 +261,7 @@ def advisory_from_payload(
     observed_at: str,
     context: dict[str, Any] | None = None,
     source_hint: str | None = None,
+    source_path: str | None = None,
 ) -> AdvisoryRecord | None:
     context = context or {}
     vuln_id = normalize_vuln_id(
@@ -298,6 +301,10 @@ def advisory_from_payload(
     affected_versions = affected_versions_from_payload(payload, fixed_version)
 
     severity = normalize_severity(first_value(payload, ("Severity", "severity")) or payload.get("severity"))
+    published_at = first_value(payload, ("PublishedAt", "published", "published_at", "datePublished"))
+    advisory_container = payload.get("Advisory")
+    if isinstance(advisory_container, dict):
+        published_at = published_at or first_value(advisory_container, ("PublishedAt", "published", "published_at"))
 
     return AdvisoryRecord(
         vuln_id=vuln_id,
@@ -308,6 +315,8 @@ def advisory_from_payload(
         fixed_version=fixed_version,
         severity=severity,
         observed_at=observed_at,
+        published_at=str(published_at) if published_at else None,
+        source_path=source_path,
         title=first_value(payload, ("Title", "title", "summary")),
         summary=first_value(payload, ("Description", "description", "details", "summary")),
     )
@@ -327,13 +336,14 @@ def parse_advisories(
     observed_at: str,
     context: dict[str, Any] | None = None,
     source_hint: str | None = None,
+    source_path: str | None = None,
 ) -> list[AdvisoryRecord]:
     context = context or {}
     advisories: list[AdvisoryRecord] = []
 
     if isinstance(payload, list):
         for item in payload:
-            advisories.extend(parse_advisories(item, observed_at, context, source_hint))
+            advisories.extend(parse_advisories(item, observed_at, context, source_hint, source_path))
         return advisories
 
     if not isinstance(payload, dict):
@@ -342,7 +352,7 @@ def parse_advisories(
     if "Entries" in payload and isinstance(payload["Entries"], list):
         for entry in payload["Entries"]:
             if isinstance(entry, dict):
-                advisories.extend(parse_advisories(entry, observed_at, context, source_hint))
+                advisories.extend(parse_advisories(entry, observed_at, context, source_hint, source_path))
         return advisories
 
     if "vulnerabilities" in payload and isinstance(payload["vulnerabilities"], list):
@@ -355,7 +365,7 @@ def parse_advisories(
             child = {key: value for key, value in payload.items() if key != "vulnerabilities"}
             child.update(vulnerability)
             child["package"] = package
-            advisories.extend(parse_advisories(child, observed_at, context, source_hint))
+            advisories.extend(parse_advisories(child, observed_at, context, source_hint, source_path))
         return advisories
 
     if "affected" in payload and isinstance(payload["affected"], list):
@@ -367,24 +377,24 @@ def parse_advisories(
             package = affected.get("package")
             if isinstance(package, dict):
                 child["package"] = package
-            advisories.extend(parse_advisories(child, observed_at, context, source_hint))
+            advisories.extend(parse_advisories(child, observed_at, context, source_hint, source_path))
         return advisories
 
-    advisory = advisory_from_payload(payload, observed_at, context, source_hint)
+    advisory = advisory_from_payload(payload, observed_at, context, source_hint, source_path)
     if advisory:
         advisories.append(advisory)
         return advisories
 
     for key, value in payload.items():
         if isinstance(value, (dict, list)):
-            advisories.extend(parse_advisories(value, observed_at, context_from_key(str(key), context), source_hint))
+            advisories.extend(parse_advisories(value, observed_at, context_from_key(str(key), context), source_hint, source_path))
 
     return advisories
 
 
 def load_advisories_from_json(path: Path, observed_at: str, source_hint: str | None = None) -> list[AdvisoryRecord]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    return parse_advisories(payload, observed_at, source_hint=source_hint)
+    return parse_advisories(payload, observed_at, source_hint=source_hint, source_path=str(path))
 
 
 def load_advisories_from_directory(
