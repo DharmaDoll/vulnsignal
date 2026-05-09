@@ -12,4 +12,4 @@ if [ ! -x "$gitleaks_bin" ]; then
   exit 1
 fi
 
-exec "$gitleaks_bin" protect --staged --redact --no-banner
+exec "$gitleaks_bin" protect --staged --redact --no-banner --max-target-megabytes 3
