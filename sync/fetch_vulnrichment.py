@@ -48,16 +48,16 @@ def _year_from_iso(value: str | None) -> int | None:
         return None
 
 
-def _keep_for_core_db(item: dict[str, Any]) -> bool:
+def _keep_for_core_db_min_year(item: dict[str, Any], min_year: int) -> bool:
     year = _year_from_iso(item.get("published_at"))
     if year is not None:
-        return year >= MIN_YEAR
+        return year >= min_year
     vuln_id = item.get("vuln_id")
     if isinstance(vuln_id, str) and vuln_id.startswith("CVE-"):
         parts = vuln_id.split("-")
         if len(parts) >= 3:
             try:
-                return int(parts[1]) >= MIN_YEAR
+                return int(parts[1]) >= min_year
             except ValueError:
                 return True
     return True
@@ -314,6 +314,7 @@ def sync(
     limit: int | None = None,
     dry_run: bool = False,
     cache_only: bool = False,
+    min_year: int = MIN_YEAR,
 ) -> FetchResult:
     conn = None
     written = 0
@@ -330,7 +331,7 @@ def sync(
 
         conn = connect()
         for item in rows:
-            if not _keep_for_core_db(item):
+            if not _keep_for_core_db_min_year(item, min_year):
                 continue
             existing = conn.execute(
                 """
@@ -392,12 +393,19 @@ def main() -> None:
     parser.add_argument("--limit", type=int)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--cache-only", action="store_true")
+    parser.add_argument(
+        "--min-year",
+        type=int,
+        default=MIN_YEAR,
+        help="Only write records published in this year or later to core.db.",
+    )
     args = parser.parse_args()
     result = sync(
         source_dir=args.source_dir,
         limit=args.limit,
         dry_run=args.dry_run,
         cache_only=args.cache_only,
+        min_year=args.min_year,
     )
     print(result)
 

@@ -18,7 +18,7 @@ FEED_PROVIDERS = {
     "trivy_vuln_list": ("Trivy vuln-list",),
     "trivy_db": ("Trivy DB",),
     "go-exploitdb": ("go-exploitdb",),
-    "vulnrichment": ("Vulnrichment",),
+    "vulnrichment": ("Vulnrichment", "CISA Vulnrichment"),
     "vex": ("VEX", "CSAF", "OpenVEX"),
     "nvd": ("NVD",),
 }

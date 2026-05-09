@@ -8,8 +8,9 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from db.migrate import migrate
+from sync import fetch_trivy
 from sync import fetch_trivy_db
-from sync.trivy_adapter import TrivyDBSchemaError, VulnerabilityRecord, load_vulnerabilities_from_db_with_cache
+from sync.trivy_adapter import AdvisoryRecord, TrivyDBSchemaError, VulnerabilityRecord, load_vulnerabilities_from_db_with_cache
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -70,6 +71,42 @@ class TrivyAdapterTests(TestCase):
 
 
 class FetchTrivyDbTests(TestCase):
+    def test_sync_skips_trivy_json_before_custom_min_year(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            core_db = tmp_path / "core.db"
+            advisory_path = tmp_path / "advisory.json"
+            migrate(core_db)
+
+            advisory = AdvisoryRecord(
+                vuln_id="CVE-2023-0001",
+                source="trivy",
+                ecosystem="maven",
+                package_name="sample",
+                affected_versions=["< 1.0.0"],
+                fixed_version="1.0.0",
+                severity="HIGH",
+                observed_at="2026-05-08T00:00:00+00:00",
+                published_at="2023-01-01T00:00:00Z",
+                source_path=str(advisory_path),
+                title="Old Trivy advisory",
+                summary="Should be skipped by the 2024 cutoff.",
+            )
+
+            def connect_to_core_db() -> sqlite3.Connection:
+                conn = sqlite3.connect(core_db)
+                conn.row_factory = sqlite3.Row
+                return conn
+
+            with patch("sync.fetch_trivy.connect", side_effect=connect_to_core_db), patch(
+                "sync.fetch_trivy.load_advisories_from_json",
+                return_value=[advisory],
+            ):
+                result = fetch_trivy.sync(advisory_path, dry_run=False, min_year=2024)
+
+            self.assertEqual(1, result.rows_fetched)
+            self.assertEqual(0, result.rows_written)
+
     def test_sync_writes_signals_and_fetch_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -134,6 +171,42 @@ class FetchTrivyDbTests(TestCase):
             self.assertEqual("Sample OpenSSL vulnerability", vuln_row["title"])
             self.assertEqual("Synthetic sample for importer verification.", vuln_row["summary"])
             self.assertEqual("HIGH", vuln_row["severity"])
+
+    def test_sync_skips_trivy_db_before_custom_min_year(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            core_db = tmp_path / "core.db"
+            trivy_db_dir = tmp_path / "trivy_cache.db"
+            trivy_db_dir.mkdir()
+            _write_json(trivy_db_dir / "metadata.json", {"Version": 2})
+            migrate(core_db)
+
+            vulnerability = VulnerabilityRecord(
+                vuln_id="CVE-2023-0001",
+                source="trivy-db",
+                title="Old OpenSSL vulnerability",
+                summary="Should be skipped by the 2024 cutoff.",
+                severity="HIGH",
+                cvss_score=7.5,
+                cvss_vector="CVSS:3.1/AV:N",
+                vendor_severity={"aqua": 4},
+                references=["https://example.invalid/advisory"],
+                observed_at="2026-05-08T00:00:00+00:00",
+            )
+
+            def connect_to_core_db() -> sqlite3.Connection:
+                conn = sqlite3.connect(core_db)
+                conn.row_factory = sqlite3.Row
+                return conn
+
+            with patch("sync.fetch_trivy_db.connect", side_effect=connect_to_core_db), patch(
+                "sync.fetch_trivy_db.load_vulnerabilities_from_db_with_cache",
+                return_value=([vulnerability], False),
+            ):
+                result = fetch_trivy_db.sync(trivy_db_dir, dry_run=False, min_year=2024)
+
+            self.assertEqual(1, result.rows_fetched)
+            self.assertEqual(0, result.rows_written)
 
     def test_sync_logs_error_without_raising(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

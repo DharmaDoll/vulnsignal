@@ -7,6 +7,9 @@ GHSA, Trivy vuln-list, and Vulnrichment are all operated from local git mirrors 
 For core.db ingestion, only keep records published in 2015 or later.
 Refresh those mirrors with `./scripts/update_data_mirrors.sh`.
 
+For a reproducible smaller validation run, use `./scripts/ingest_recent_core_db.sh`.
+It refreshes the local mirrors, ingests the latest three calendar years by default, and finishes with `python3 -m sync.feed_quality`.
+
 Current implementation plan: `docs/ROADMAP.md`
 
 Git pre-commit secret scanning:

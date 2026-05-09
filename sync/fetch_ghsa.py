@@ -63,15 +63,15 @@ def _alias_year(alias: str) -> int | None:
         return None
 
 
-def _keep_for_core_db(item: dict[str, Any]) -> bool:
+def _keep_for_core_db(item: dict[str, Any], min_year: int) -> bool:
     year = _year_from_iso(item.get("published_at"))
     if year is not None:
-        return year >= MIN_YEAR
+        return year >= min_year
     for alias in item.get("aliases") or []:
         if isinstance(alias, str):
             alias_year = _alias_year(alias)
             if alias_year is not None:
-                return alias_year >= MIN_YEAR
+                return alias_year >= min_year
     return True
 
 
@@ -268,6 +268,7 @@ def sync(
     dry_run: bool = False,
     cache_only: bool = False,
     include_unreviewed: bool = False,
+    min_year: int = MIN_YEAR,
 ) -> FetchResult:
     conn = None
     written = 0
@@ -284,7 +285,7 @@ def sync(
 
         conn = connect()
         for item in rows:
-            if not _keep_for_core_db(item):
+            if not _keep_for_core_db(item, min_year):
                 continue
             cvss_score = item.get("cvss_score")
             cvss_vector = item.get("cvss_vector")
@@ -374,6 +375,12 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--cache-only", action="store_true")
     parser.add_argument("--include-unreviewed", action="store_true")
+    parser.add_argument(
+        "--min-year",
+        type=int,
+        default=MIN_YEAR,
+        help="Only write advisories published in this year or later to core.db.",
+    )
     args = parser.parse_args()
     result = sync(
         source_dir=args.source_dir,
@@ -381,6 +388,7 @@ def main() -> None:
         dry_run=args.dry_run,
         cache_only=args.cache_only,
         include_unreviewed=args.include_unreviewed,
+        min_year=args.min_year,
     )
     print(result)
 

@@ -36,6 +36,7 @@ def run_sync():
 - **Always write to `fetch_log`** — both on success and failure
 - **Never raise uncaught exceptions** to the scheduler — log and exit cleanly
 - **Never delete existing data** on failure — fall back to last known good state
+- For bounded local validation, prefer `--min-year` or `./scripts/ingest_recent_core_db.sh`
 
 ## Retry pattern (mandatory)
 
@@ -85,3 +86,12 @@ Using wrong signal_type breaks scoring lookups — check taxonomy before writing
 |go-exploitdb|48h          |
 |VEX/CSAF    |48h          |
 |Vulnrichment|48h          |
+
+## Local validation workflow
+
+When you need a reproducible `core.db` sample that is small enough to inspect manually:
+
+1. Run `db/migrate.py` first.
+2. Refresh mirrors with `./scripts/update_data_mirrors.sh`.
+3. Run `./scripts/ingest_recent_core_db.sh` or pass `--min-year 2024` to the relevant fetchers.
+4. Inspect `python3 -m sync.feed_quality` output and `fetch_log`.

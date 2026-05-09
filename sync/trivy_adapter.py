@@ -408,7 +408,7 @@ def load_advisories_from_directory(
         target_dir = source_dir / target
         if not target_dir.exists():
             continue
-        for path in sorted(target_dir.rglob("*.json")):
+        for path in sorted(path for path in target_dir.rglob("*.json") if path.is_file()):
             advisories.extend(load_advisories_from_json(path, observed_at, source_hint=target))
     return advisories
 

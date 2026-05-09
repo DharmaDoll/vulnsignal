@@ -76,6 +76,8 @@ Observed workflow for the real database:
 3. Validate the generated DB through `sync/exploit_adapter.py` before writing any signals.
 4. Import CVE-linked rows with `python3 -m sync.fetch_exploitdb --db db/exploit.db`.
 
+For a bounded validation ingest, add `--min-year 2024` to the import command.
+
 Observed facts from the current verification run:
 
 - `exploitdb` fetched 60,578 Offensive Security records.
@@ -142,6 +144,8 @@ Operational notes:
 - The adapter extracts vulnerability metadata from `vulnerability` and writes `enrichment` signals.
 - The output signal type remains `enrichment`.
 
+For a bounded validation ingest, add `--min-year 2024` to the command above.
+
 ### How to obtain the DB
 
 Two supported ways to get a usable cache directory:
@@ -200,6 +204,8 @@ Operational notes:
 - The output signal type remains `package_advisory`.
 - The Trivy DB path stays reserved for vulnerability metadata enrichment and scanner-aligned CVSS/severity context.
 
+For a bounded validation ingest, add `--min-year 2024`.
+
 Day 1 note:
 
 - `vuln-list` is useful when we want to improve package-range quality and test coverage, but it is not required to start asset matching.
@@ -243,6 +249,7 @@ python3 -m sync.fetch_ghsa --source-dir data/github-advisory-database-mirror
 ```
 
 The default fetcher path reads `advisories/github-reviewed` under that mirror. Pass `--include-unreviewed` only if you intentionally want the extra advisories.
+For a bounded validation ingest, add `--min-year 2024`.
 
 ## NVD
 
@@ -313,8 +320,34 @@ Notes:
 - `--source-dir` may also point at an unpacked archive export if you do not want a git checkout.
 - Keep the local mirror on disk and update it by git pull or archive replacement, not by per-file manual downloads.
 
+For a bounded validation ingest, add `--min-year 2024`.
+
 ## Local feed quality
 
 - Command: `python3 -m sync.feed_quality`
 - Reads only `core.db`
 - Reports simple per-feed metrics for early data-quality assessment
+
+## Core DB validation
+
+Use this when you want a reproducible local ingest window that is small enough to inspect manually.
+
+```bash
+./scripts/ingest_recent_core_db.sh
+```
+
+The script:
+
+- runs `db/migrate.py` first
+- refreshes the local git mirrors
+- ingests GHSA, Trivy vuln-list, and Vulnrichment with a rolling `MIN_YEAR` cutoff
+- optionally ingests `db/trivy_cache.db` and `db/exploit.db` when those local sources exist
+- finishes with `python3 -m sync.feed_quality`
+
+Override the year window if needed:
+
+```bash
+MIN_YEAR=2024 ./scripts/ingest_recent_core_db.sh
+```
+
+The default window is the latest three calendar years, computed from the current year.

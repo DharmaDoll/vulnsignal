@@ -116,6 +116,46 @@ class GhsaFetchTests(TestCase):
             self.assertEqual(0, vuln_count)
             self.assertEqual(0, signal_count)
 
+    def test_sync_skips_advisories_before_custom_min_year(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            core_db = tmp_path / "core.db"
+            source_dir = tmp_path / "advisories"
+            advisory_dir = source_dir / "github-reviewed" / "2023" / "12" / "GHSA-old"
+            advisory_dir.mkdir(parents=True)
+            _write_json(
+                advisory_dir / "GHSA-old.json",
+                {
+                    "schema_version": "1.4.0",
+                    "id": "GHSA-old",
+                    "published": "2023-12-01T00:00:00Z",
+                    "modified": "2023-12-02T00:00:00Z",
+                    "aliases": ["CVE-2023-1111"],
+                    "summary": "Old GHSA advisory",
+                    "details": "Should be skipped by the 2024 cutoff.",
+                    "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"}],
+                    "affected": [
+                        {
+                            "package": {"ecosystem": "PyPI", "name": "old-package"},
+                            "ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}, {"fixed": "1.0.0"}]}],
+                        }
+                    ],
+                },
+            )
+            migrate(core_db)
+
+            def connect_to_core_db() -> sqlite3.Connection:
+                conn = sqlite3.connect(core_db)
+                conn.row_factory = sqlite3.Row
+                return conn
+
+            with patch("sync.fetch_ghsa.connect", side_effect=connect_to_core_db):
+                result = fetch_ghsa.sync(source_dir=source_dir, dry_run=False, min_year=2024)
+
+            self.assertEqual(1, result.rows_fetched)
+            self.assertEqual(0, result.rows_written)
+            self.assertFalse(result.cache_used)
+
     def test_sync_writes_signals_from_local_mirror(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

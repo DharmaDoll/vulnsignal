@@ -36,11 +36,11 @@ def _vuln_year(vuln_id: str | None) -> int | None:
         return None
 
 
-def _keep_for_core_db(advisory) -> bool:
+def _keep_for_core_db_min_year(advisory, min_year: int) -> bool:
     year = _year_from_iso(advisory.published_at)
     if year is not None:
-        return year >= MIN_YEAR
-    return (_vuln_year(advisory.vuln_id) or MIN_YEAR) >= MIN_YEAR
+        return year >= min_year
+    return (_vuln_year(advisory.vuln_id) or min_year) >= min_year
 
 
 def sync(
@@ -48,6 +48,7 @@ def sync(
     targets: list[str] | None = None,
     limit: int | None = None,
     dry_run: bool = False,
+    min_year: int = MIN_YEAR,
 ) -> FetchResult:
     conn = None
     written = 0
@@ -65,7 +66,7 @@ def sync(
 
         conn = connect()
         for advisory in advisories:
-            if not _keep_for_core_db(advisory):
+            if not _keep_for_core_db_min_year(advisory, min_year):
                 continue
             upsert_vulnerability(
                 conn,
@@ -119,8 +120,20 @@ def main() -> None:
     parser.add_argument("--target", action="append", choices=DEFAULT_TARGETS, help="Limit to one target directory. Can be repeated.")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--min-year",
+        type=int,
+        default=MIN_YEAR,
+        help="Only write advisories published in this year or later to core.db.",
+    )
     args = parser.parse_args()
-    result = sync(source_dir=args.source_dir, targets=args.target, limit=args.limit, dry_run=args.dry_run)
+    result = sync(
+        source_dir=args.source_dir,
+        targets=args.target,
+        limit=args.limit,
+        dry_run=args.dry_run,
+        min_year=args.min_year,
+    )
     print(result)
 
 

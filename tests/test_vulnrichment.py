@@ -296,3 +296,35 @@ class VulnrichmentSyncTests(TestCase):
 
             self.assertEqual(0, vuln_count)
             self.assertEqual(0, signal_count)
+
+    def test_sync_skips_records_before_custom_min_year(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            core_db = tmp_path / "core.db"
+            source_dir = tmp_path / "vulnrichment"
+            source_dir.mkdir()
+            migrate(core_db)
+
+            _write_json(
+                source_dir / "CVE-2023-0001.json",
+                {
+                    "cveMetadata": {"cveId": "CVE-2023-0001", "datePublished": "2023-01-01T00:00:00Z"},
+                    "containers": {
+                        "cna": {
+                            "title": "Old Vulnrichment sample",
+                            "descriptions": [{"lang": "en", "value": "Should be skipped by the 2024 cutoff."}],
+                        }
+                    },
+                },
+            )
+
+            def connect_to_core_db() -> sqlite3.Connection:
+                conn = sqlite3.connect(core_db)
+                conn.row_factory = sqlite3.Row
+                return conn
+
+            with patch("sync.fetch_vulnrichment.connect", side_effect=connect_to_core_db):
+                result = fetch_vulnrichment.sync(source_dir=source_dir, dry_run=False, min_year=2024)
+
+            self.assertEqual(1, result.rows_fetched)
+            self.assertEqual(0, result.rows_written)
