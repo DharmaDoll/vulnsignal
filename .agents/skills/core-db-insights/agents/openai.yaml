@@ -1,0 +1,7 @@
+interface:
+  display_name: "Core DB Insights"
+  short_description: "Deeper vuln intelligence report from core.db"
+  default_prompt: "Use $core-db-insights to generate an insight-oriented report from db/core.db for the last 3 years."
+
+policy:
+  allow_implicit_invocation: true

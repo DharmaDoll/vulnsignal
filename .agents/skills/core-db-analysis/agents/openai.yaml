@@ -1,0 +1,7 @@
+interface:
+  display_name: "Core DB Analysis"
+  short_description: "Reproducible core.db vulnerability summaries"
+  default_prompt: "Use $core-db-analysis to produce a reproducible summary from db/core.db for the last 3 years."
+
+policy:
+  allow_implicit_invocation: true
