@@ -11,6 +11,7 @@ from sync.common import connect
 
 
 FEED_PROVIDERS = {
+    "cve_program": ("CVE Program",),
     "kev": ("CISA KEV",),
     "epss": ("FIRST EPSS",),
     "ghsa": ("GitHub Advisory Database",),
@@ -24,6 +25,7 @@ FEED_PROVIDERS = {
 }
 
 REQUIRED_FIELDS = {
+    "cve_program": ("title",),
     "kev": ("date_added",),
     "epss": ("epss", "percentile"),
     "ghsa": ("severity",),
@@ -37,6 +39,7 @@ REQUIRED_FIELDS = {
 }
 
 MAX_STALENESS_HOURS = {
+    "cve_program": 24,
     "kev": 3,
     "epss": 48,
     "ghsa": 24,

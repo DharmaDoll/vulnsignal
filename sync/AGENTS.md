@@ -16,6 +16,7 @@ You are working inside the feed ingestion layer.
 - After max retries, log and exit cleanly — do NOT raise uncaught exceptions to the scheduler
 - `trivy_adapter.py` and `exploit_adapter.py` are isolation boundaries — never import from them in `app/`
 - Validate adapter schema version on every cold start; abort sync if version mismatch
+- Keep CVE Program, GHSA, Trivy, and Vulnrichment ingestion local-first; never depend on live upstream calls when a mirror exists
 
 ## Adapter contracts
 
@@ -24,5 +25,6 @@ See `docs/FEEDS.md` for:
 - `ExploitRecord` dataclass definition
 - `AdvisoryRecord` dataclass definition for Trivy JSON / vuln-list
 - `VulnerabilityRecord` dataclass definition for Trivy DB enrichment
+- CVE Program ingestion contract for `fetch_cve_program.py`
 - Expected schema version config keys
 - Signal type taxonomy (`exploit`, `package_advisory`, `enrichment`)

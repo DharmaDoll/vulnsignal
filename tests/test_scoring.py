@@ -8,7 +8,7 @@ from unittest import TestCase
 from app import scoring
 from app import skills
 from db.migrate import migrate
-from sync.common import append_signal
+from sync.common import append_signal, utc_now
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -154,6 +154,7 @@ class ScoringTests(TestCase):
             migrate(core_db)
             conn = _connect(core_db)
             try:
+                fresh_at = utc_now()
                 conn.execute(
                     """
                     INSERT INTO vulnerabilities (vuln_id, source, title, summary, severity, cvss_score, cvss_source, published_at, updated_at)
@@ -175,14 +176,14 @@ class ScoringTests(TestCase):
                     INSERT INTO fetch_log (feed, attempted_at, status, error_msg, rows_affected)
                     VALUES (?, ?, ?, ?, ?)
                     """,
-                    ("ghsa", "2026-05-09T00:00:00+00:00", "ok", None, 1),
+                    ("ghsa", fresh_at, "ok", None, 1),
                 )
                 conn.execute(
                     """
                     INSERT INTO fetch_log (feed, attempted_at, status, error_msg, rows_affected)
                     VALUES (?, ?, ?, ?, ?)
                     """,
-                    ("kev", "2026-05-09T00:00:00+00:00", "error", "boom", 0),
+                    ("kev", fresh_at, "error", "boom", 0),
                 )
                 conn.commit()
 

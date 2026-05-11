@@ -1,9 +1,9 @@
 # vulnsignal
 Lean AI-Native Vulnerability Intelligence Platform
 
-Current feed priority: KEV, EPSS, GHSA, Trivy JSON, Vulnrichment, go-exploitdb. NVD is optional enrichment in the current phase.
+Current feed priority: CVE Program, KEV, EPSS, GHSA, Trivy JSON, Vulnrichment, go-exploitdb. NVD is optional enrichment in the current phase.
 
-GHSA, Trivy vuln-list, and Vulnrichment are all operated from local git mirrors under `data/`.
+GHSA, CVE Program, Trivy vuln-list, and Vulnrichment are all operated from local git mirrors under `data/`.
 For core.db ingestion, only keep records published in 2015 or later.
 Refresh those mirrors with `./scripts/update_data_mirrors.sh`.
 
@@ -33,6 +33,13 @@ go-exploitdb execution path:
 2. Fetch SQLite data, for example `go-exploitdb fetch exploitdb --dbtype sqlite3 --dbpath db/exploit.db`.
 3. Validate the generated DB through `sync/exploit_adapter.py`.
 4. Import CVE-linked rows with `python3 -m sync.fetch_exploitdb --db db/exploit.db`.
+
+CVE Program execution path:
+
+1. Mirror `CVEProject/cvelistV5` locally with `git clone https://github.com/CVEProject/cvelistV5 data/cvelistv5-mirror`.
+2. Refresh that mirror with `git -C data/cvelistv5-mirror pull --ff-only`.
+3. Ingest the local JSON tree with `python3 -m sync.fetch_cve_program --source-dir data/cvelistv5-mirror`.
+4. Use `--min-year 2024` for a bounded validation ingest.
 
 GHSA execution path:
 

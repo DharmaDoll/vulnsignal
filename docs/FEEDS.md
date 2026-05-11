@@ -4,6 +4,7 @@
 
 |Feed        |Frequency|Max staleness|On exceeded      |
 |------------|---------|-------------|-----------------|
+|CVE Program  |every 6h |24h          |Warn + use cache |
 |KEV         |hourly   |3h           |Alert + use cache|
 |EPSS        |daily    |48h          |Warn + use cache |
 |GHSA        |every 6h |24h          |Warn + use cache |
@@ -26,6 +27,8 @@
 
 Initial priority (highest wins): GHSA → Vulnrichment → Trivy JSON → feed-provided severity.
 
+The CVE Program is the canonical CVE identifier and metadata backbone. Use it to fill missing identifiers, dates, titles, and references, but do not let it override higher-trust severity or CVSS when those are already present.
+
 NVD is optional enrichment in the current phase. If enabled later, use it as a canonical CVE reference without blocking ingestion from the core feeds.
 
 Never overwrite a higher-trust value. Store all values as signals; `vulnerabilities.cvss_score` reflects highest-trust available.
@@ -40,6 +43,34 @@ A vendor’s `not_affected` assertion overrides all CVE-level signals regardless
 In ranking APIs, `not_affected` records are excluded rather than merely downweighted.
 
 -----
+
+## CVE Program
+
+- Source: `CVEProject/cvelistV5`
+- Signal type: `enrichment`
+- The CVE Program tree is the canonical CVE metadata backbone for this project.
+- When writing to `core.db`, keep only records published in 2015 or later.
+
+### Production operation
+
+Mirror the repository locally and ingest the local JSON tree.
+
+```bash
+git clone https://github.com/CVEProject/cvelistV5 data/cvelistv5-mirror
+git -C data/cvelistv5-mirror pull --ff-only
+python3 -m sync.fetch_cve_program --source-dir data/cvelistv5-mirror
+```
+
+For bounded validation:
+
+```bash
+python3 -m sync.fetch_cve_program --source-dir data/cvelistv5-mirror --min-year 2024
+```
+
+Notes:
+
+- The fetcher reads local JSON only; it does not talk to cve.org directly.
+- Keep the mirror on disk and update it by git pull or archive replacement.
 
 ## go-exploitdb adapter contract
 

@@ -9,6 +9,7 @@ MIN_YEAR="${MIN_YEAR:-$(( $(date +%Y) - 2 ))}"
 python3 db/migrate.py
 ./scripts/update_data_mirrors.sh
 
+python3 -m sync.fetch_cve_program --min-year "$MIN_YEAR"
 python3 -m sync.fetch_ghsa --min-year "$MIN_YEAR"
 python3 -m sync.fetch_trivy_vuln_list --min-year "$MIN_YEAR"
 python3 -m sync.fetch_vulnrichment --min-year "$MIN_YEAR"

@@ -6,6 +6,7 @@ The current phase is feed feasibility and local data quality. The goal is to pro
 
 Key decisions:
 
+- CVE Program is the canonical CVE reference backbone.
 - NVD is optional enrichment, not a blocker for MVP ingestion.
 - GHSA is a core feed.
 - Trivy supports advisory JSON and direct DB ingestion.

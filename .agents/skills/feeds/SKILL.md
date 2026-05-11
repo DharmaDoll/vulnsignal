@@ -2,7 +2,7 @@
 name: feeds
 description: >
   Use when implementing or modifying any fetch job (fetch_nvd.py,
-  fetch_kev.py, fetch_epss.py, fetch_trivy.py, fetch_vex.py,
+  fetch_cve_program.py, fetch_kev.py, fetch_epss.py, fetch_trivy.py, fetch_vex.py,
   fetch_vulnrichment.py) or adapter module (trivy_adapter.py,
   exploit_adapter.py).
   Triggers on: “implement fetcher”, “add feed”, “fix adapter”,

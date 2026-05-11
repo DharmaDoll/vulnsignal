@@ -19,7 +19,7 @@ Optimize for 80/20 outcomes. Speed and clarity over completeness.
 
 ```
 External Feeds
- ├ NVD          — canonical CVE reference
+ ├ CVE Program  — canonical CVE reference
  ├ KEV          — known exploited vulnerabilities
  ├ EPSS         — exploit probability scores
  ├ GHSA         — OSS package advisories and GHSA-only IDs
@@ -60,7 +60,7 @@ Use `ATTACH DATABASE` for cross-DB queries only when necessary. ETL summaries in
 
 **Adapters isolate external schema churn.** Both Trivy DB and go-exploitdb have broken their schemas across versions. All external DB access goes through adapter modules with schema version pinning.
 
-**Trust hierarchy over last-write-wins.** Multiple feeds may report conflicting severity data. Resolution is deterministic and starts with GHSA, Vulnrichment, and Trivy JSON. NVD is optional enrichment in the current phase. See `FEEDS.md`.
+**Trust hierarchy over last-write-wins.** Multiple feeds may report conflicting severity data. Resolution is deterministic and starts with GHSA, Vulnrichment, and Trivy JSON. The CVE Program is the canonical CVE identifier/reference backbone; NVD is optional enrichment in the current phase. See `FEEDS.md`.
 
 **VEX is a hard suppression.** A vendor `not_affected` assertion overrides CVSS/KEV signals and excludes the item from ranking. Not a soft weight — a business decision.
 
