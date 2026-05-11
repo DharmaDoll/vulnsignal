@@ -56,7 +56,7 @@ In ranking APIs, `not_affected` records are excluded rather than merely downweig
 Mirror the repository locally and ingest the local JSON tree.
 
 ```bash
-git clone https://github.com/CVEProject/cvelistV5 data/cvelistv5-mirror
+git clone --depth 1 https://github.com/CVEProject/cvelistV5 data/cvelistv5-mirror
 git -C data/cvelistv5-mirror pull --ff-only
 python3 -m sync.fetch_cve_program --source-dir data/cvelistv5-mirror
 ```
@@ -71,6 +71,7 @@ Notes:
 
 - The fetcher reads local JSON only; it does not talk to cve.org directly.
 - Keep the mirror on disk and update it by git pull or archive replacement.
+- Use a shallow clone unless you explicitly need full history.
 
 ## go-exploitdb adapter contract
 
@@ -214,7 +215,7 @@ python3 -m sync.fetch_trivy_vuln_list --source-dir data/aquasecurity-vuln-list-m
 Recommended mirror setup:
 
 ```bash
-git clone https://github.com/aquasecurity/vuln-list data/aquasecurity-vuln-list-mirror
+git clone --depth 1 https://github.com/aquasecurity/vuln-list data/aquasecurity-vuln-list-mirror
 git -C data/aquasecurity-vuln-list-mirror pull --ff-only
 ```
 
@@ -274,7 +275,7 @@ Day 1 note:
 Mirror the advisory database locally and ingest the reviewed tree.
 
 ```bash
-git clone https://github.com/github/advisory-database data/github-advisory-database-mirror
+git clone --depth 1 https://github.com/github/advisory-database data/github-advisory-database-mirror
 git -C data/github-advisory-database-mirror pull --ff-only
 python3 -m sync.fetch_ghsa --source-dir data/github-advisory-database-mirror
 ```
@@ -317,7 +318,7 @@ data/vulnrichment/
 Initial mirror setup:
 
 ```bash
-git clone https://github.com/cisagov/vulnrichment data/vulnrichment-mirror
+git clone --depth 1 https://github.com/cisagov/vulnrichment data/vulnrichment-mirror
 ```
 
 Or update all mirrors at once:
@@ -325,6 +326,8 @@ Or update all mirrors at once:
 ```bash
 ./scripts/update_data_mirrors.sh
 ```
+
+The update script uses shallow clones and recreates broken mirrors automatically.
 
 Routine update:
 

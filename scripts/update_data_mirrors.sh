@@ -3,17 +3,43 @@ set -eu
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+is_valid_git_repo() {
+  git -C "$1" rev-parse --verify HEAD >/dev/null 2>&1
+}
+
+clone_fresh() {
+  repo_url="$1"
+  target_dir="$2"
+
+  parent_dir="$(dirname "$target_dir")"
+  temp_dir="$(mktemp -d "$parent_dir/.mirror.XXXXXX")"
+  cleanup() {
+    rm -rf "$temp_dir"
+  }
+
+  trap cleanup RETURN
+  git clone --depth 1 "$repo_url" "$temp_dir"
+  rm -rf "$target_dir"
+  mv "$temp_dir" "$target_dir"
+  trap - RETURN
+}
+
 clone_or_pull() {
   repo_url="$1"
   target_dir="$2"
 
   if [ -d "$target_dir/.git" ]; then
-    git -C "$target_dir" pull --ff-only
+    if is_valid_git_repo "$target_dir"; then
+      git -C "$target_dir" pull --ff-only
+    else
+      printf '%s\n' "warn: $target_dir is a broken mirror; recreating it" >&2
+      clone_fresh "$repo_url" "$target_dir"
+    fi
   elif [ -e "$target_dir" ]; then
     printf '%s\n' "error: $target_dir exists but is not a git repository" >&2
     exit 1
   else
-    git clone --depth 1 "$repo_url" "$target_dir"
+    clone_fresh "$repo_url" "$target_dir"
   fi
 }
 
