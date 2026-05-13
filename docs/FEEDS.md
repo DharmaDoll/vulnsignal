@@ -103,8 +103,8 @@ Rules:
 
 Observed workflow for the real database:
 
-1. Install a matching binary, for example `go install github.com/vulsio/go-exploitdb@v0.7.0`.
-2. Fetch the desired source into SQLite, for example `go-exploitdb fetch exploitdb --dbtype sqlite3 --dbpath db/exploit.db`.
+1. Install a matching binary, for example `go install github.com/vulsio/go-exploitdb@latest`.
+2. Fetch the database through the repo wrapper, which defaults to all source families, for example `python3 -m sync.update_exploitdb --binary ~/go/bin/go-exploitdb`.
 3. Validate the generated DB through `sync/exploit_adapter.py` before writing any signals.
 4. Import CVE-linked rows with `python3 -m sync.fetch_exploitdb --db db/exploit.db`.
 
@@ -122,6 +122,7 @@ Operational implications:
 - The adapter must treat `fetch_meta` as the schema/version anchor for current go-exploitdb builds.
 - Only CVE-linked rows are usable for this project's `vuln_id` model.
 - Routine refreshes should keep the source set small until there is a clear reason to ingest all auxiliary sources.
+- `signals` ingestion is idempotent for exact duplicates; `observed_at` stays as a history field, not part of the duplicate key.
 
 -----
 
@@ -201,6 +202,8 @@ oras pull ghcr.io/aquasecurity/trivy-db:2
 
 After pulling with ORAS, copy or extract the resulting `trivy.db` and `metadata.json` into the cache directory you pass to `--db-dir`.
 
+If `db/core.db` is locked by another ingest run and you want to validate Trivy DB in isolation, set `VULNSIGNAL_DB_PATH` to point at a separate SQLite file before running `db/migrate.py` and `python3 -m sync.fetch_trivy_db`.
+
 ## Trivy vuln-list execution notes
 
 Use the raw advisory tree from `aquasecurity/vuln-list` as the first ingestion step.
@@ -259,6 +262,26 @@ Day 1 note:
 - Default ingestion reads all CSV rows and upserts `epss_current`; use `--limit` only for local sampling
 - `--date YYYY-MM-DD` selects the score date; default is yesterday
 - Signal type: `epss` is reserved for material EPSS events, not daily full snapshots
+
+### Production operation
+
+Run the daily snapshot importer directly:
+
+```bash
+python3 -m sync.fetch_epss
+```
+
+To pin a specific date:
+
+```bash
+python3 -m sync.fetch_epss --date 2026-05-12
+```
+
+For bounded sampling only:
+
+```bash
+python3 -m sync.fetch_epss --limit 1000
+```
 
 ## GHSA
 
@@ -373,10 +396,12 @@ Use this when you want a reproducible local ingest window that is small enough t
 The script:
 
 - runs `db/migrate.py` first
-- refreshes the local git mirrors
+- refreshes the local git mirrors unless `SKIP_MIRROR_REFRESH=1`
+- fetches KEV from the live CISA feed
 - ingests GHSA, Trivy vuln-list, and Vulnrichment with a rolling `MIN_YEAR` cutoff
 - optionally ingests `db/trivy_cache.db` and `db/exploit.db` when those local sources exist
 - finishes with `python3 -m sync.feed_quality`
+- takes a lock so only one refresh run touches `core.db` at a time
 
 Override the year window if needed:
 
@@ -385,3 +410,12 @@ MIN_YEAR=2024 ./scripts/ingest_recent_core_db.sh
 ```
 
 The default window is the latest three calendar years, computed from the current year.
+
+Current end-to-end flow for a reproducible local corpus:
+
+1. Run `db/migrate.py`.
+2. Refresh the local mirrors with `./scripts/update_data_mirrors.sh`, or set `SKIP_MIRROR_REFRESH=1` to reuse existing mirrors when offline.
+3. Run `./scripts/ingest_recent_core_db.sh` to fetch KEV, ingest `cvelistV5`, GHSA, Trivy vuln-list, and Vulnrichment with `--min-year`, and finish with `python3 -m sync.feed_quality`.
+4. Optionally ingest `db/trivy_cache.db` and `db/exploit.db` when those local sources are present.
+
+If you only need the newest operational KEV set, run `python3 -m sync.fetch_kev` directly. For the bounded 3-year validation corpus, prefer the wrapper script so the mirror refresh and quality check happen in the same pass.

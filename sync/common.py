@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import tempfile
 import time
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,7 +15,7 @@ from urllib.request import Request, urlopen
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = ROOT / "db" / "core.db"
+DB_PATH = Path(os.environ.get("VULNSIGNAL_DB_PATH", str(ROOT / "db" / "core.db")))
 CACHE_DIR = ROOT / "db" / "cache"
 
 
@@ -81,6 +84,71 @@ def write_cache(feed: str, payload: Any) -> None:
     cache_path(feed).write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
+class JsonArrayCacheWriter(AbstractContextManager["JsonArrayCacheWriter"]):
+    def __init__(self, feed: str):
+        self._feed = feed
+        self._path = cache_path(feed)
+        self._tmp: Any = None
+        self._started = False
+        self._closed = False
+
+    def __enter__(self) -> "JsonArrayCacheWriter":
+        self._tmp = tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            delete=False,
+            dir=str(self._path.parent),
+            prefix=f"{self._path.name}.tmp.",
+        )
+        self._tmp.write("[")
+        return self
+
+    def write(self, payload: Any) -> None:
+        if self._closed or self._tmp is None:
+            raise RuntimeError("cache writer is not open")
+        if self._started:
+            self._tmp.write(",")
+        self._tmp.write(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        self._started = True
+
+    def commit(self) -> None:
+        if self._closed or self._tmp is None:
+            return
+        self._tmp.write("]")
+        self._tmp.flush()
+        os.fsync(self._tmp.fileno())
+        self._tmp.close()
+        os.replace(self._tmp.name, self._path)
+        self._closed = True
+
+    def abort(self) -> None:
+        if self._closed or self._tmp is None:
+            return
+        try:
+            self._tmp.close()
+        finally:
+            try:
+                os.unlink(self._tmp.name)
+            except FileNotFoundError:
+                pass
+        self._closed = True
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        if exc_type is None:
+            if self._tmp is not None and not self._closed:
+                if not self._started:
+                    self._tmp.write("]")
+                    self._tmp.flush()
+                    os.fsync(self._tmp.fileno())
+                    self._tmp.close()
+                    os.replace(self._tmp.name, self._path)
+                else:
+                    self.commit()
+            return False
+        self.abort()
+        return False
+
+
 def read_text_cache(feed: str, suffix: str = "txt") -> str:
     path = cache_path(feed, suffix)
     if not path.exists():
@@ -127,21 +195,39 @@ def append_signal(
     score: float | None,
     value: dict[str, Any],
     observed_at: str | None = None,
-) -> None:
+) -> bool:
+    value_json = json.dumps(value, sort_keys=True, ensure_ascii=False)
+    before = conn.total_changes
+    # observed_at is a history field; exact signal identity ignores it so reruns stay idempotent.
     conn.execute(
         """
         INSERT INTO signals (vuln_id, signal_type, provider, score, value_json, observed_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        SELECT ?, ?, ?, ?, ?, ?
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM signals
+          WHERE vuln_id = ?
+            AND signal_type = ?
+            AND provider = ?
+            AND score IS ?
+            AND value_json = ?
+        )
         """,
         (
             vuln_id,
             signal_type,
             provider,
             score,
-            json.dumps(value, sort_keys=True, ensure_ascii=False),
+            value_json,
             observed_at or utc_now(),
+            vuln_id,
+            signal_type,
+            provider,
+            score,
+            value_json,
         ),
     )
+    return conn.total_changes > before
 
 
 def upsert_vulnerability(

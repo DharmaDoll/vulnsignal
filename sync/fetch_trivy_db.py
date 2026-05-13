@@ -3,9 +3,14 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from contextlib import closing
 
 from sync.common import ROOT, FetchResult, append_signal, connect, log_fetch, upsert_vulnerability, utc_now
-from sync.trivy_adapter import TRIVY_DB_SCHEMA_VERSION, load_vulnerabilities_from_db_with_cache
+from sync.trivy_adapter import (
+    TRIVY_DB_SCHEMA_VERSION,
+    iter_vulnerabilities_from_db,
+    load_vulnerabilities_from_db_cache_only,
+)
 
 
 FEED = "trivy_db"
@@ -42,50 +47,97 @@ def sync(
     cache_used = False
     try:
         observed_at = utc_now()
-        vulnerabilities, cache_used = load_vulnerabilities_from_db_with_cache(db_dir, observed_at, expected_schema_version)
-        fetched = len(vulnerabilities)
-        if limit is not None:
-            vulnerabilities = vulnerabilities[:limit]
-
         if dry_run:
-            return FetchResult(rows_fetched=len(vulnerabilities), rows_written=0, cache_used=cache_used)
+            with closing(iter_vulnerabilities_from_db(db_dir, observed_at, expected_schema_version)) as vulnerability_iter:
+                for vulnerability in vulnerability_iter:
+                    if limit is not None and fetched >= limit:
+                        break
+                    fetched += 1
+            return FetchResult(rows_fetched=fetched, rows_written=0, cache_used=False)
 
         conn = connect()
-        for vulnerability in vulnerabilities:
-            if not _keep_for_core_db(vulnerability, min_year):
-                continue
-            upsert_vulnerability(
-                conn,
-                vuln_id=vulnerability.vuln_id,
-                source="trivy-db",
-                title=vulnerability.title,
-                summary=vulnerability.summary,
-                severity=vulnerability.severity,
-                cvss_score=vulnerability.cvss_score,
-                cvss_source="Trivy DB",
-            )
-            append_signal(
-                conn,
-                vuln_id=vulnerability.vuln_id,
-                signal_type="enrichment",
-                provider=PROVIDER,
-                score=vulnerability.cvss_score,
-                value={
-                    "title": vulnerability.title,
-                    "summary": vulnerability.summary,
-                    "severity": vulnerability.severity,
-                    "cvss_score": vulnerability.cvss_score,
-                    "cvss_vector": vulnerability.cvss_vector,
-                    "vendor_severity": vulnerability.vendor_severity,
-                    "references": vulnerability.references,
-                    "source_path": str(db_dir),
-                },
-                observed_at=vulnerability.observed_at,
-            )
-            written += 1
-        log_fetch(conn, FEED, "ok", written)
-        conn.commit()
-        return FetchResult(rows_fetched=fetched, rows_written=written, cache_used=cache_used)
+        try:
+            with closing(iter_vulnerabilities_from_db(db_dir, observed_at, expected_schema_version)) as vulnerability_iter:
+                for vulnerability in vulnerability_iter:
+                    if limit is not None and fetched >= limit:
+                        break
+                    fetched += 1
+                    if not _keep_for_core_db(vulnerability, min_year):
+                        continue
+                    upsert_vulnerability(
+                        conn,
+                        vuln_id=vulnerability.vuln_id,
+                        source="trivy-db",
+                        title=vulnerability.title,
+                        summary=vulnerability.summary,
+                        severity=vulnerability.severity,
+                        cvss_score=vulnerability.cvss_score,
+                        cvss_source="Trivy DB",
+                    )
+                    if append_signal(
+                        conn,
+                        vuln_id=vulnerability.vuln_id,
+                        signal_type="enrichment",
+                        provider=PROVIDER,
+                        score=vulnerability.cvss_score,
+                        value={
+                            "title": vulnerability.title,
+                            "summary": vulnerability.summary,
+                            "severity": vulnerability.severity,
+                            "cvss_score": vulnerability.cvss_score,
+                            "cvss_vector": vulnerability.cvss_vector,
+                            "vendor_severity": vulnerability.vendor_severity,
+                            "references": vulnerability.references,
+                            "source_path": str(db_dir),
+                        },
+                        observed_at=vulnerability.observed_at,
+                    ):
+                        written += 1
+            log_fetch(conn, FEED, "ok", written)
+            conn.commit()
+            return FetchResult(rows_fetched=fetched, rows_written=written, cache_used=False)
+        except Exception:
+            conn.rollback()
+            vulnerabilities = load_vulnerabilities_from_db_cache_only(db_dir, observed_at, expected_schema_version)
+            cache_used = True
+            if limit is not None:
+                vulnerabilities = vulnerabilities[:limit]
+            for vulnerability in vulnerabilities:
+                fetched += 1
+                if not _keep_for_core_db(vulnerability, min_year):
+                    continue
+                upsert_vulnerability(
+                    conn,
+                    vuln_id=vulnerability.vuln_id,
+                    source="trivy-db",
+                    title=vulnerability.title,
+                    summary=vulnerability.summary,
+                    severity=vulnerability.severity,
+                    cvss_score=vulnerability.cvss_score,
+                    cvss_source="Trivy DB",
+                )
+                if append_signal(
+                    conn,
+                    vuln_id=vulnerability.vuln_id,
+                    signal_type="enrichment",
+                    provider=PROVIDER,
+                    score=vulnerability.cvss_score,
+                    value={
+                        "title": vulnerability.title,
+                        "summary": vulnerability.summary,
+                        "severity": vulnerability.severity,
+                        "cvss_score": vulnerability.cvss_score,
+                        "cvss_vector": vulnerability.cvss_vector,
+                        "vendor_severity": vulnerability.vendor_severity,
+                        "references": vulnerability.references,
+                        "source_path": str(db_dir),
+                    },
+                    observed_at=vulnerability.observed_at,
+                ):
+                    written += 1
+            log_fetch(conn, FEED, "ok", written)
+            conn.commit()
+            return FetchResult(rows_fetched=fetched, rows_written=written, cache_used=cache_used)
     except Exception as exc:
         if not dry_run:
             if conn is None:

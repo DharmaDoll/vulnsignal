@@ -135,8 +135,8 @@ class FetchTrivyDbTests(TestCase):
                 return conn
 
             with patch("sync.fetch_trivy_db.connect", side_effect=connect_to_core_db), patch(
-                "sync.fetch_trivy_db.load_vulnerabilities_from_db_with_cache",
-                return_value=([vulnerability], False),
+                "sync.fetch_trivy_db.iter_vulnerabilities_from_db",
+                return_value=(item for item in [vulnerability]),
             ):
                 result = fetch_trivy_db.sync(trivy_db_dir, dry_run=False)
 
@@ -200,8 +200,8 @@ class FetchTrivyDbTests(TestCase):
                 return conn
 
             with patch("sync.fetch_trivy_db.connect", side_effect=connect_to_core_db), patch(
-                "sync.fetch_trivy_db.load_vulnerabilities_from_db_with_cache",
-                return_value=([vulnerability], False),
+                "sync.fetch_trivy_db.iter_vulnerabilities_from_db",
+                return_value=(item for item in [vulnerability]),
             ):
                 result = fetch_trivy_db.sync(trivy_db_dir, dry_run=False, min_year=2024)
 
@@ -223,7 +223,10 @@ class FetchTrivyDbTests(TestCase):
                 return conn
 
             with patch("sync.fetch_trivy_db.connect", side_effect=connect_to_core_db), patch(
-                "sync.fetch_trivy_db.load_vulnerabilities_from_db_with_cache",
+                "sync.fetch_trivy_db.iter_vulnerabilities_from_db",
+                side_effect=RuntimeError("boom"),
+            ), patch(
+                "sync.fetch_trivy_db.load_vulnerabilities_from_db_cache_only",
                 side_effect=RuntimeError("boom"),
             ):
                 result = fetch_trivy_db.sync(trivy_db_dir, dry_run=False)

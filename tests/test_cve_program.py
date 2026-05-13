@@ -58,6 +58,45 @@ class CveProgramLoadTests(TestCase):
         self.assertEqual(9.1, row["cvss_score"])
         self.assertEqual("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", row["cvss_vector"])
 
+    def test_load_payload_preserves_zero_cvss_score(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source_dir = Path(tmp)
+            _write_json(
+                source_dir / "CVE-2026-41517.json",
+                {
+                    "cveMetadata": {
+                        "cveId": "CVE-2026-41517",
+                        "datePublished": "2026-05-01T00:00:00Z",
+                        "dateUpdated": "2026-05-02T00:00:00Z",
+                    },
+                    "containers": {
+                        "cna": {
+                            "title": "Zero-score advisory",
+                            "descriptions": [{"lang": "en", "value": "Synthetic zero score."}],
+                            "metrics": [
+                                {
+                                    "cvssV4_0": {
+                                        "baseScore": 0,
+                                        "baseSeverity": "NONE",
+                                        "vectorString": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:N/SC:N/SI:N/SA:N",
+                                    }
+                                }
+                            ],
+                        }
+                    },
+                },
+            )
+
+            rows, cache_used = fetch_cve_program.load_payload(source_dir, cache_only=False)
+
+        self.assertFalse(cache_used)
+        self.assertEqual(1, len(rows))
+        row = rows[0]
+        self.assertEqual("CVE-2026-41517", row["vuln_id"])
+        self.assertEqual(0.0, row["cvss_score"])
+        self.assertEqual("CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:N/SC:N/SI:N/SA:N", row["cvss_vector"])
+        self.assertEqual("NONE", row["severity"])
+
 
 class CveProgramSyncTests(TestCase):
     def test_sync_skips_records_before_custom_min_year(self) -> None:

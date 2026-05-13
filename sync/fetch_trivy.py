@@ -64,7 +64,7 @@ def sync(path: Path, limit: int | None = None, dry_run: bool = False, min_year: 
                 summary=advisory.summary,
                 severity=advisory.severity,
             )
-            append_signal(
+            if append_signal(
                 conn,
                 vuln_id=advisory.vuln_id,
                 signal_type="package_advisory",
@@ -79,8 +79,8 @@ def sync(path: Path, limit: int | None = None, dry_run: bool = False, min_year: 
                     "source_path": str(path),
                 },
                 observed_at=advisory.observed_at,
-            )
-            written += 1
+            ):
+                written += 1
         log_fetch(conn, FEED, "ok", written)
         conn.commit()
         return FetchResult(rows_fetched=len(advisories), rows_written=written, cache_used=False)

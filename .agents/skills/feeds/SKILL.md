@@ -37,6 +37,7 @@ def run_sync():
 - **Never raise uncaught exceptions** to the scheduler — log and exit cleanly
 - **Never delete existing data** on failure — fall back to last known good state
 - For bounded local validation, prefer `--min-year` or `./scripts/ingest_recent_core_db.sh`
+- If `db/core.db` is locked, set `VULNSIGNAL_DB_PATH` to a separate SQLite file and run `db/migrate.py` plus the relevant fetcher there
 
 ## Retry pattern (mandatory)
 
@@ -93,5 +94,15 @@ When you need a reproducible `core.db` sample that is small enough to inspect ma
 
 1. Run `db/migrate.py` first.
 2. Refresh mirrors with `./scripts/update_data_mirrors.sh`.
-3. Run `./scripts/ingest_recent_core_db.sh` or pass `--min-year 2024` to the relevant fetchers.
-4. Inspect `python3 -m sync.feed_quality` output and `fetch_log`.
+3. Pull KEV with `python3 -m sync.fetch_kev`.
+4. Pull EPSS with `python3 -m sync.fetch_epss`.
+5. Run `./scripts/ingest_recent_core_db.sh` for the full bounded corpus, or pass `--min-year 2024` to the relevant fetchers when you are validating a single feed.
+6. Inspect `python3 -m sync.feed_quality` output and `fetch_log`.
+
+Notes:
+
+- `./scripts/ingest_recent_core_db.sh` is the preferred reproducible path for the current 3-year validation corpus. It includes KEV, EPSS, and the mirrored feeds.
+- The script takes a lock to avoid two concurrent refreshes stepping on the same SQLite database.
+- If network refresh is unavailable, set `SKIP_MIRROR_REFRESH=1` and reuse the current local mirrors.
+- Use `python3 -m sync.fetch_kev` directly only when you want to refresh the live KEV feed in isolation.
+- Use `python3 -m sync.fetch_epss` directly only when you want to refresh the live EPSS snapshot in isolation.

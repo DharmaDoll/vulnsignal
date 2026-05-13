@@ -10,6 +10,7 @@ from typing import Any
 from sync.common import (
     ROOT,
     FetchResult,
+    JsonArrayCacheWriter,
     append_signal,
     connect,
     log_fetch,
@@ -259,8 +260,7 @@ def _record_from_item(item: dict[str, Any], source_path: Path) -> dict[str, Any]
     }
 
 
-def _load_rows_from_source_dir(source_dir: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
+def _load_rows_from_source_dir(source_dir: Path):
     for path in _iter_source_files(source_dir):
         payload = _parse_json(path)
         items = payload if isinstance(payload, list) else [payload]
@@ -269,8 +269,7 @@ def _load_rows_from_source_dir(source_dir: Path) -> list[dict[str, Any]]:
                 continue
             row = _record_from_item(item, path)
             if row is not None:
-                rows.append(row)
-    return rows
+                yield row
 
 
 def load_payload(source_dir: Path, cache_only: bool = False) -> tuple[list[dict[str, Any]], bool]:
@@ -278,7 +277,7 @@ def load_payload(source_dir: Path, cache_only: bool = False) -> tuple[list[dict[
         return read_cache(FEED), True
 
     try:
-        rows = _load_rows_from_source_dir(source_dir)
+        rows = list(_load_rows_from_source_dir(source_dir))
         write_cache(FEED, rows)
         return rows, False
     except Exception:
@@ -321,56 +320,117 @@ def sync(
     fetched = 0
     cache_used = False
     try:
-        rows, cache_used = load_payload(source_dir, cache_only=cache_only)
-        fetched = len(rows)
-        if limit is not None:
-            rows = rows[:limit]
+        if cache_only:
+            rows, cache_used = read_cache(FEED), True
+            fetched = len(rows)
+            if limit is not None:
+                rows = rows[:limit]
+            if dry_run:
+                return FetchResult(rows_fetched=len(rows), rows_written=0, cache_used=cache_used)
+            item_iter = iter(rows)
+            cache_writer = None
+        else:
+            item_iter = _load_rows_from_source_dir(source_dir)
+            if limit is not None:
+                from itertools import islice
 
-        if dry_run:
-            return FetchResult(rows_fetched=len(rows), rows_written=0, cache_used=cache_used)
+                item_iter = islice(item_iter, limit)
+            if dry_run:
+                rows = list(item_iter)
+                fetched = len(rows)
+                return FetchResult(rows_fetched=fetched, rows_written=0, cache_used=cache_used)
+            cache_writer = JsonArrayCacheWriter(FEED)
 
         conn = connect()
-        for item in rows:
-            if not _keep_for_core_db_min_year(item, min_year):
-                continue
-            existing = conn.execute(
-                """
-                SELECT source, title, summary, severity, cvss_score, cvss_source, published_at, updated_at
-                FROM vulnerabilities
-                WHERE vuln_id = ?
-                """,
-                (item["vuln_id"],),
-            ).fetchone()
-            merged = _merge_vulnerability(existing, item)
-            upsert_vulnerability(
-                conn,
-                vuln_id=merged["vuln_id"],
-                source=merged["source"],
-                title=merged["title"],
-                summary=merged["summary"],
-                severity=merged["severity"],
-                cvss_score=merged["cvss_score"],
-                cvss_source=merged["cvss_source"],
-                published_at=merged["published_at"],
-                updated_at=merged["updated_at"],
-            )
-            append_signal(
-                conn,
-                vuln_id=merged["vuln_id"],
-                signal_type="enrichment",
-                provider=PROVIDER,
-                score=merged["cvss_score"],
-                value={
-                    "summary": merged["summary"],
-                    "severity": merged["severity"],
-                    "cvss_score": merged["cvss_score"],
-                    "cvss_vector": merged.get("cvss_vector"),
-                    "references": merged.get("references"),
-                    "source_path": merged.get("source_path"),
-                },
-                observed_at=utc_now(),
-            )
-            written += 1
+        if cache_writer is not None:
+            with cache_writer as cache:
+                for item in item_iter:
+                    fetched += 1
+                    if not _keep_for_core_db_min_year(item, min_year):
+                        continue
+                    existing = conn.execute(
+                        """
+                        SELECT source, title, summary, severity, cvss_score, cvss_source, published_at, updated_at
+                        FROM vulnerabilities
+                        WHERE vuln_id = ?
+                        """,
+                        (item["vuln_id"],),
+                    ).fetchone()
+                    merged = _merge_vulnerability(existing, item)
+                    upsert_vulnerability(
+                        conn,
+                        vuln_id=merged["vuln_id"],
+                        source=merged["source"],
+                        title=merged["title"],
+                        summary=merged["summary"],
+                        severity=merged["severity"],
+                        cvss_score=merged["cvss_score"],
+                        cvss_source=merged["cvss_source"],
+                        published_at=merged["published_at"],
+                        updated_at=merged["updated_at"],
+                    )
+                    if append_signal(
+                        conn,
+                        vuln_id=merged["vuln_id"],
+                        signal_type="enrichment",
+                        provider=PROVIDER,
+                        score=merged["cvss_score"],
+                        value={
+                            "summary": merged["summary"],
+                            "severity": merged["severity"],
+                            "cvss_score": merged["cvss_score"],
+                            "cvss_vector": merged.get("cvss_vector"),
+                            "references": merged.get("references"),
+                            "source_path": merged.get("source_path"),
+                        },
+                        observed_at=utc_now(),
+                    ):
+                        written += 1
+                    cache.write(item)
+                cache.commit()
+        else:
+            for item in item_iter:
+                fetched += 1
+                if not _keep_for_core_db_min_year(item, min_year):
+                    continue
+                existing = conn.execute(
+                    """
+                    SELECT source, title, summary, severity, cvss_score, cvss_source, published_at, updated_at
+                    FROM vulnerabilities
+                    WHERE vuln_id = ?
+                    """,
+                    (item["vuln_id"],),
+                ).fetchone()
+                merged = _merge_vulnerability(existing, item)
+                upsert_vulnerability(
+                    conn,
+                    vuln_id=merged["vuln_id"],
+                    source=merged["source"],
+                    title=merged["title"],
+                    summary=merged["summary"],
+                    severity=merged["severity"],
+                    cvss_score=merged["cvss_score"],
+                    cvss_source=merged["cvss_source"],
+                    published_at=merged["published_at"],
+                    updated_at=merged["updated_at"],
+                )
+                if append_signal(
+                    conn,
+                    vuln_id=merged["vuln_id"],
+                    signal_type="enrichment",
+                    provider=PROVIDER,
+                    score=merged["cvss_score"],
+                    value={
+                        "summary": merged["summary"],
+                        "severity": merged["severity"],
+                        "cvss_score": merged["cvss_score"],
+                        "cvss_vector": merged.get("cvss_vector"),
+                        "references": merged.get("references"),
+                        "source_path": merged.get("source_path"),
+                    },
+                    observed_at=utc_now(),
+                ):
+                    written += 1
         log_fetch(conn, FEED, "ok", written)
         conn.commit()
         return FetchResult(rows_fetched=fetched, rows_written=written, cache_used=cache_used)

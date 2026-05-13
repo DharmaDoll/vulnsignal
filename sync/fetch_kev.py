@@ -55,7 +55,7 @@ def sync(limit: int | None = None, dry_run: bool = False, cache_only: bool = Fal
                 title=item.get("vulnerabilityName"),
                 summary=item.get("shortDescription"),
             )
-            append_signal(
+            if append_signal(
                 conn,
                 vuln_id=vuln_id,
                 signal_type="kev",
@@ -70,8 +70,8 @@ def sync(limit: int | None = None, dry_run: bool = False, cache_only: bool = Fal
                     "required_action": item.get("requiredAction"),
                 },
                 observed_at=utc_now(),
-            )
-            written += 1
+            ):
+                written += 1
         log_fetch(conn, FEED, "ok", written)
         conn.commit()
         return FetchResult(rows_fetched=len(rows), rows_written=written, cache_used=cache_used)

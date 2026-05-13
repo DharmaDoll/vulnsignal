@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = ROOT / "db" / "core.db"
+DB_PATH = Path(os.environ.get("VULNSIGNAL_DB_PATH", str(ROOT / "db" / "core.db")))
 MIGRATIONS_DIR = ROOT / "sql" / "migrations"
 INDEXES_PATH = ROOT / "sql" / "indexes.sql"
 

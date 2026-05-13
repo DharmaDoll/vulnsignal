@@ -3,6 +3,10 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import os
+import tempfile
+from collections import deque
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable
@@ -397,20 +401,32 @@ def load_advisories_from_json(path: Path, observed_at: str, source_hint: str | N
     return parse_advisories(payload, observed_at, source_hint=source_hint, source_path=str(path))
 
 
-def load_advisories_from_directory(
+def iter_advisories_from_json(path: Path, observed_at: str, source_hint: str | None = None):
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    for advisory in parse_advisories(payload, observed_at, source_hint=source_hint, source_path=str(path)):
+        yield advisory
+
+
+def iter_advisories_from_directory(
     source_dir: Path,
     observed_at: str,
     targets: list[str] | None = None,
-) -> list[AdvisoryRecord]:
-    advisories: list[AdvisoryRecord] = []
+):
     selected_targets = targets or []
     for target in selected_targets:
         target_dir = source_dir / target
         if not target_dir.exists():
             continue
         for path in sorted(path for path in target_dir.rglob("*.json") if path.is_file()):
-            advisories.extend(load_advisories_from_json(path, observed_at, source_hint=target))
-    return advisories
+            yield from iter_advisories_from_json(path, observed_at, source_hint=target)
+
+
+def load_advisories_from_directory(
+    source_dir: Path,
+    observed_at: str,
+    targets: list[str] | None = None,
+) -> list[AdvisoryRecord]:
+    return list(iter_advisories_from_directory(source_dir, observed_at, targets=targets))
 
 
 def ecosystem_from_source_path(source_path: list[str]) -> str:
@@ -548,6 +564,105 @@ def _load_trivy_db_dump_from_helper(db_dir: Path, expected_schema_version: int) 
 
     _write_trivy_db_cache(lines)
     return tuple(rows), False
+
+
+def iter_vulnerabilities_from_db(
+    db_dir: Path,
+    observed_at: str,
+    expected_schema_version: int = TRIVY_DB_SCHEMA_VERSION,
+):
+    _validate_trivy_db_schema(db_dir, expected_schema_version)
+    if not TRIVY_DB_HELPER_DIR.exists():
+        raise FetchError(f"missing Trivy DB helper: {TRIVY_DB_HELPER_DIR}")
+
+    command = _trivy_db_dump_command(db_dir, expected_schema_version)
+    process = subprocess.Popen(
+        command,
+        cwd=TRIVY_DB_HELPER_DIR,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    tail: deque[str] = deque(maxlen=10)
+    temp_name: str | None = None
+    completed = False
+
+    assert process.stdout is not None
+    cache_path = ROOT / "db" / "cache" / f"{TRIVY_DB_CACHE_FEED}.{TRIVY_DB_CACHE_SUFFIX}"
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            delete=False,
+            dir=str(cache_path.parent),
+            prefix=f"{cache_path.name}.tmp.",
+        ) as tmp:
+            temp_name = tmp.name
+            for line in process.stdout:
+                tail.append(line)
+                tmp.write(line)
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    row = json.loads(stripped)
+                except json.JSONDecodeError as exc:
+                    process.kill()
+                    with suppress(Exception):
+                        process.wait()
+                    raise FetchError(f"invalid Trivy DB dump output: {exc}") from exc
+                if row.get("row_type") != "vulnerability":
+                    continue
+                vuln_id = row.get("vuln_id")
+                payload = row.get("payload")
+                if not isinstance(vuln_id, str) or not isinstance(payload, dict):
+                    continue
+                yield vulnerability_from_payload(vuln_id, payload, observed_at, source_hint="trivy-db")
+
+            returncode = process.wait()
+            if returncode != 0:
+                raise FetchError(
+                    f"Trivy DB helper failed with exit code {returncode}: {''.join(tail).strip()}"
+                )
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        if temp_name is not None:
+            os.replace(temp_name, cache_path)
+            completed = True
+    except Exception:
+        process.kill()
+        with suppress(Exception):
+            process.wait()
+        raise
+    finally:
+        if process.poll() is None:
+            process.kill()
+            with suppress(Exception):
+                process.wait()
+        if not completed and temp_name:
+            with suppress(FileNotFoundError):
+                os.unlink(temp_name)
+
+
+def load_vulnerabilities_from_db_cache_only(
+    db_dir: Path,
+    observed_at: str,
+    expected_schema_version: int = TRIVY_DB_SCHEMA_VERSION,
+) -> list[VulnerabilityRecord]:
+    _validate_trivy_db_schema(db_dir, expected_schema_version)
+    rows = _load_trivy_db_dump_from_cache()
+    vulnerabilities: list[VulnerabilityRecord] = []
+    for row in rows:
+        row_type = row.get("row_type")
+        vuln_id = row.get("vuln_id")
+        payload = row.get("payload")
+        if row_type != "vulnerability":
+            continue
+        if not isinstance(vuln_id, str) or not isinstance(payload, dict):
+            continue
+        vulnerabilities.append(vulnerability_from_payload(vuln_id, payload, observed_at, source_hint="trivy-db"))
+    return vulnerabilities
 
 
 def load_advisories_from_db_with_cache(

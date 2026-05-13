@@ -9,6 +9,7 @@ from typing import Any
 from sync.common import (
     ROOT,
     FetchResult,
+    JsonArrayCacheWriter,
     append_signal,
     connect,
     log_fetch,
@@ -186,17 +187,29 @@ def _extract_cvss_from_metric(metric: Any) -> tuple[float | None, str | None, st
     for key in ("cvssV4_0", "cvssV3_1", "cvssV3_0", "cvss"):
         value = metric.get(key)
         if isinstance(value, dict):
-            score = value.get("baseScore") or value.get("score")
-            vector = value.get("vectorString") or value.get("vector")
-            severity = value.get("baseSeverity") or value.get("severity")
+            score = value.get("baseScore")
+            if score is None:
+                score = value.get("score")
+            vector = value.get("vectorString")
+            if vector is None:
+                vector = value.get("vector")
+            severity = value.get("baseSeverity")
+            if severity is None:
+                severity = value.get("severity")
             return (
                 _normalize_float(score),
                 vector if isinstance(vector, str) else None,
                 _normalize_severity(severity),
             )
-    score = metric.get("baseScore") or metric.get("score")
-    vector = metric.get("vectorString") or metric.get("vector")
-    severity = metric.get("baseSeverity") or metric.get("severity")
+    score = metric.get("baseScore")
+    if score is None:
+        score = metric.get("score")
+    vector = metric.get("vectorString")
+    if vector is None:
+        vector = metric.get("vector")
+    severity = metric.get("baseSeverity")
+    if severity is None:
+        severity = metric.get("severity")
     if score is not None or vector is not None or severity is not None:
         return (
             _normalize_float(score),
@@ -245,7 +258,6 @@ def _record_from_item(item: dict[str, Any], source_path: Path) -> dict[str, Any]
 
 
 def _load_rows_from_source_dir(source_dir: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
     for path in _iter_source_files(source_dir):
         payload = _parse_json(path)
         items = payload if isinstance(payload, list) else [payload]
@@ -254,8 +266,7 @@ def _load_rows_from_source_dir(source_dir: Path) -> list[dict[str, Any]]:
                 continue
             row = _record_from_item(item, path)
             if row is not None:
-                rows.append(row)
-    return rows
+                yield row
 
 
 def load_payload(source_dir: Path, cache_only: bool = False) -> tuple[list[dict[str, Any]], bool]:
@@ -263,7 +274,7 @@ def load_payload(source_dir: Path, cache_only: bool = False) -> tuple[list[dict[
         return read_cache(FEED), True
 
     try:
-        rows = _load_rows_from_source_dir(source_dir)
+        rows = list(_load_rows_from_source_dir(source_dir))
         write_cache(FEED, rows)
         return rows, False
     except Exception:
@@ -282,48 +293,101 @@ def sync(
     fetched = 0
     cache_used = False
     try:
-        rows, cache_used = load_payload(source_dir, cache_only=cache_only)
-        fetched = len(rows)
-        if limit is not None:
-            rows = rows[:limit]
+        if cache_only:
+            rows, cache_used = read_cache(FEED), True
+            fetched = len(rows)
+            if limit is not None:
+                rows = rows[:limit]
+            if dry_run:
+                return FetchResult(rows_fetched=len(rows), rows_written=0, cache_used=cache_used)
+            row_iter = iter(rows)
+            cache_writer = None
+        else:
+            row_iter = _load_rows_from_source_dir(source_dir)
+            if limit is not None:
+                from itertools import islice
 
-        if dry_run:
-            return FetchResult(rows_fetched=len(rows), rows_written=0, cache_used=cache_used)
+                row_iter = islice(row_iter, limit)
+            if dry_run:
+                rows = list(row_iter)
+                fetched = len(rows)
+                return FetchResult(rows_fetched=fetched, rows_written=0, cache_used=cache_used)
+            cache_writer = JsonArrayCacheWriter(FEED)
 
         conn = connect()
-        for item in rows:
-            if not _keep_for_core_db(item, min_year):
-                continue
-            upsert_vulnerability(
-                conn,
-                vuln_id=item["vuln_id"],
-                source=item["source"],
-                title=item.get("title"),
-                summary=item.get("summary"),
-                severity=item.get("severity"),
-                cvss_score=item.get("cvss_score"),
-                cvss_source=item.get("cvss_source"),
-                published_at=item.get("published_at"),
-                updated_at=item.get("updated_at"),
-            )
-            append_signal(
-                conn,
-                vuln_id=item["vuln_id"],
-                signal_type="enrichment",
-                provider=PROVIDER,
-                score=item.get("cvss_score"),
-                value={
-                    "title": item.get("title"),
-                    "summary": item.get("summary"),
-                    "severity": item.get("severity"),
-                    "cvss_score": item.get("cvss_score"),
-                    "cvss_vector": item.get("cvss_vector"),
-                    "references": item.get("references"),
-                    "source_path": item.get("source_path"),
-                },
-                observed_at=utc_now(),
-            )
-            written += 1
+        if cache_writer is not None:
+            with cache_writer as cache:
+                for item in row_iter:
+                    fetched += 1
+                    if not _keep_for_core_db(item, min_year):
+                        continue
+                    upsert_vulnerability(
+                        conn,
+                        vuln_id=item["vuln_id"],
+                        source=item["source"],
+                        title=item.get("title"),
+                        summary=item.get("summary"),
+                        severity=item.get("severity"),
+                        cvss_score=item.get("cvss_score"),
+                        cvss_source=item.get("cvss_source"),
+                        published_at=item.get("published_at"),
+                        updated_at=item.get("updated_at"),
+                    )
+                    cache.write(item)
+                    if append_signal(
+                        conn,
+                        vuln_id=item["vuln_id"],
+                        signal_type="enrichment",
+                        provider=PROVIDER,
+                        score=item.get("cvss_score"),
+                        value={
+                            "title": item.get("title"),
+                            "summary": item.get("summary"),
+                            "severity": item.get("severity"),
+                            "cvss_score": item.get("cvss_score"),
+                            "cvss_vector": item.get("cvss_vector"),
+                            "references": item.get("references"),
+                            "source_path": item.get("source_path"),
+                        },
+                        observed_at=utc_now(),
+                    ):
+                        written += 1
+                cache.commit()
+        else:
+            for item in row_iter:
+                fetched += 1
+                if not _keep_for_core_db(item, min_year):
+                    continue
+                upsert_vulnerability(
+                    conn,
+                    vuln_id=item["vuln_id"],
+                    source=item["source"],
+                    title=item.get("title"),
+                    summary=item.get("summary"),
+                    severity=item.get("severity"),
+                    cvss_score=item.get("cvss_score"),
+                    cvss_source=item.get("cvss_source"),
+                    published_at=item.get("published_at"),
+                    updated_at=item.get("updated_at"),
+                )
+                if append_signal(
+                    conn,
+                    vuln_id=item["vuln_id"],
+                    signal_type="enrichment",
+                    provider=PROVIDER,
+                    score=item.get("cvss_score"),
+                    value={
+                        "title": item.get("title"),
+                        "summary": item.get("summary"),
+                        "severity": item.get("severity"),
+                        "cvss_score": item.get("cvss_score"),
+                        "cvss_vector": item.get("cvss_vector"),
+                        "references": item.get("references"),
+                        "source_path": item.get("source_path"),
+                    },
+                    observed_at=utc_now(),
+                ):
+                    written += 1
         log_fetch(conn, FEED, "ok", written)
         conn.commit()
         return FetchResult(rows_fetched=fetched, rows_written=written, cache_used=cache_used)

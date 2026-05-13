@@ -9,6 +9,7 @@ from typing import Any
 from sync.common import (
     ROOT,
     FetchResult,
+    JsonArrayCacheWriter,
     append_signal,
     connect,
     log_fetch,
@@ -95,6 +96,16 @@ def _iter_json_files(source_dir: Path, include_unreviewed: bool) -> list[Path]:
         elif root.is_dir():
             paths.extend(sorted(path for path in root.rglob("*.json") if path.is_file()))
     return paths
+
+
+def _iter_rows_from_source_dir(source_dir: Path, include_unreviewed: bool) -> Any:
+    for path in _iter_json_files(source_dir, include_unreviewed):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            continue
+        advisory = _advisory_from_payload(payload, path)
+        if advisory is not None:
+            yield advisory
 
 
 def _normalize_severity(value: Any) -> str | None:
@@ -247,15 +258,8 @@ def load_payload(
     if cache_only:
         return read_cache(FEED), True
 
-    rows: list[dict[str, Any]] = []
     try:
-        for path in _iter_json_files(source_dir, include_unreviewed):
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(payload, dict):
-                continue
-            advisory = _advisory_from_payload(payload, path)
-            if advisory is not None:
-                rows.append(advisory)
+        rows = list(_iter_rows_from_source_dir(source_dir, include_unreviewed))
         write_cache(FEED, rows)
         return rows, False
     except Exception:
@@ -275,77 +279,159 @@ def sync(
     fetched = 0
     cache_used = False
     try:
-        rows, cache_used = load_payload(source_dir, cache_only, include_unreviewed=include_unreviewed)
-        fetched = len(rows)
-        if limit is not None:
-            rows = rows[:limit]
+        if cache_only:
+            rows, cache_used = read_cache(FEED), True
+            fetched = len(rows)
+            if limit is not None:
+                rows = rows[:limit]
+            if dry_run:
+                return FetchResult(rows_fetched=len(rows), rows_written=0, cache_used=cache_used)
+            advisory_iter = iter(rows)
+            cache_writer = None
+        else:
+            advisory_iter = _iter_rows_from_source_dir(source_dir, include_unreviewed)
+            if limit is not None:
+                from itertools import islice
 
-        if dry_run:
-            return FetchResult(rows_fetched=len(rows), rows_written=0, cache_used=cache_used)
+                advisory_iter = islice(advisory_iter, limit)
+            if dry_run:
+                rows = list(advisory_iter)
+                fetched = len(rows)
+                return FetchResult(rows_fetched=fetched, rows_written=0, cache_used=cache_used)
+            cache_writer = JsonArrayCacheWriter(FEED)
 
         conn = connect()
-        for item in rows:
-            if not _keep_for_core_db(item, min_year):
-                continue
-            cvss_score = item.get("cvss_score")
-            cvss_vector = item.get("cvss_vector")
-            vuln_ids = item.get("vuln_ids") or []
-            if not isinstance(vuln_ids, list):
-                vuln_ids = []
-            for vuln_id in vuln_ids:
-                upsert_vulnerability(
-                    conn,
-                    vuln_id=vuln_id,
-                    source="ghsa",
-                    title=item.get("title"),
-                    summary=item.get("summary"),
-                    severity=item.get("severity"),
-                    cvss_score=float(cvss_score) if cvss_score is not None else None,
-                    cvss_source=PROVIDER if cvss_score is not None else None,
-                    published_at=item.get("published_at"),
-                    updated_at=item.get("updated_at"),
-                )
-                append_signal(
-                    conn,
-                    vuln_id=vuln_id,
-                    signal_type="enrichment",
-                    provider=PROVIDER,
-                    score=float(cvss_score) if cvss_score is not None else None,
-                    value={
-                        "ghsa_id": item.get("ghsa_id"),
-                        "aliases": item.get("aliases"),
-                        "severity": item.get("severity"),
-                        "cvss_score": cvss_score,
-                        "cvss_vector": cvss_vector,
-                        "references": item.get("references"),
-                        "source_path": item.get("source_path"),
-                    },
-                    observed_at=utc_now(),
-                )
-                written += 1
+        if cache_writer is not None:
+            with cache_writer as cache:
+                for item in advisory_iter:
+                    fetched += 1
+                    if not _keep_for_core_db(item, min_year):
+                        continue
+                    cvss_score = item.get("cvss_score")
+                    cvss_vector = item.get("cvss_vector")
+                    vuln_ids = item.get("vuln_ids") or []
+                    if not isinstance(vuln_ids, list):
+                        vuln_ids = []
+                    for vuln_id in vuln_ids:
+                        upsert_vulnerability(
+                            conn,
+                            vuln_id=vuln_id,
+                            source="ghsa",
+                            title=item.get("title"),
+                            summary=item.get("summary"),
+                            severity=item.get("severity"),
+                            cvss_score=float(cvss_score) if cvss_score is not None else None,
+                            cvss_source=PROVIDER if cvss_score is not None else None,
+                            published_at=item.get("published_at"),
+                            updated_at=item.get("updated_at"),
+                        )
+                        if append_signal(
+                            conn,
+                            vuln_id=vuln_id,
+                            signal_type="enrichment",
+                            provider=PROVIDER,
+                            score=float(cvss_score) if cvss_score is not None else None,
+                            value={
+                                "ghsa_id": item.get("ghsa_id"),
+                                "aliases": item.get("aliases"),
+                                "severity": item.get("severity"),
+                                "cvss_score": cvss_score,
+                                "cvss_vector": cvss_vector,
+                                "references": item.get("references"),
+                                "source_path": item.get("source_path"),
+                            },
+                            observed_at=utc_now(),
+                        ):
+                            written += 1
 
-            for affected in item.get("affected") or []:
-                if not isinstance(affected, dict):
+                    for affected in item.get("affected") or []:
+                        if not isinstance(affected, dict):
+                            continue
+                        for vuln_id in vuln_ids:
+                            if append_signal(
+                                conn,
+                                vuln_id=vuln_id,
+                                signal_type="package_advisory",
+                                provider=PROVIDER,
+                                score=None,
+                                value={
+                                    "ghsa_id": item.get("ghsa_id"),
+                                    "aliases": item.get("aliases"),
+                                    "ecosystem": affected.get("ecosystem"),
+                                    "package_name": affected.get("package_name"),
+                                    "affected_versions": affected.get("affected_versions"),
+                                    "fixed_version": affected.get("fixed_version"),
+                                    "source_path": item.get("source_path"),
+                                },
+                                observed_at=utc_now(),
+                            ):
+                                written += 1
+                    cache.write(item)
+                cache.commit()
+        else:
+            for item in advisory_iter:
+                fetched += 1
+                if not _keep_for_core_db(item, min_year):
                     continue
+                cvss_score = item.get("cvss_score")
+                cvss_vector = item.get("cvss_vector")
+                vuln_ids = item.get("vuln_ids") or []
+                if not isinstance(vuln_ids, list):
+                    vuln_ids = []
                 for vuln_id in vuln_ids:
-                    append_signal(
+                    upsert_vulnerability(
                         conn,
                         vuln_id=vuln_id,
-                        signal_type="package_advisory",
+                        source="ghsa",
+                        title=item.get("title"),
+                        summary=item.get("summary"),
+                        severity=item.get("severity"),
+                        cvss_score=float(cvss_score) if cvss_score is not None else None,
+                        cvss_source=PROVIDER if cvss_score is not None else None,
+                        published_at=item.get("published_at"),
+                        updated_at=item.get("updated_at"),
+                    )
+                    if append_signal(
+                        conn,
+                        vuln_id=vuln_id,
+                        signal_type="enrichment",
                         provider=PROVIDER,
-                        score=None,
+                        score=float(cvss_score) if cvss_score is not None else None,
                         value={
                             "ghsa_id": item.get("ghsa_id"),
                             "aliases": item.get("aliases"),
-                            "ecosystem": affected.get("ecosystem"),
-                            "package_name": affected.get("package_name"),
-                            "affected_versions": affected.get("affected_versions"),
-                            "fixed_version": affected.get("fixed_version"),
+                            "severity": item.get("severity"),
+                            "cvss_score": cvss_score,
+                            "cvss_vector": cvss_vector,
+                            "references": item.get("references"),
                             "source_path": item.get("source_path"),
                         },
                         observed_at=utc_now(),
-                    )
-                    written += 1
+                    ):
+                        written += 1
+
+                for affected in item.get("affected") or []:
+                    if not isinstance(affected, dict):
+                        continue
+                    for vuln_id in vuln_ids:
+                        if append_signal(
+                            conn,
+                            vuln_id=vuln_id,
+                            signal_type="package_advisory",
+                            provider=PROVIDER,
+                            score=None,
+                            value={
+                                "ghsa_id": item.get("ghsa_id"),
+                                "aliases": item.get("aliases"),
+                                "ecosystem": affected.get("ecosystem"),
+                                "package_name": affected.get("package_name"),
+                                "affected_versions": affected.get("affected_versions"),
+                                "fixed_version": affected.get("fixed_version"),
+                                "source_path": item.get("source_path"),
+                            },
+                            observed_at=utc_now(),
+                        ):
+                            written += 1
 
         log_fetch(conn, FEED, "ok", written)
         conn.commit()

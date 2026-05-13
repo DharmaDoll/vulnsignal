@@ -9,9 +9,21 @@ Refresh those mirrors with `./scripts/update_data_mirrors.sh`.
 The script uses shallow clones and recreates broken mirrors automatically.
 
 For a reproducible smaller validation run, use `./scripts/ingest_recent_core_db.sh`.
-It refreshes the local mirrors, ingests the latest three calendar years by default, and finishes with `python3 -m sync.feed_quality`.
+It refreshes the local mirrors, ingests KEV and EPSS plus the latest three calendar years by default, and finishes with `python3 -m sync.feed_quality`.
 
 Current implementation plan: `docs/ROADMAP.md`
+
+Quick local refresh:
+
+```bash
+python3 db/migrate.py
+./scripts/update_data_mirrors.sh
+./scripts/ingest_recent_core_db.sh
+```
+
+If you only want the live KEV feed, run `python3 -m sync.fetch_kev` directly. If you only want the live EPSS snapshot, run `python3 -m sync.fetch_epss` directly. For a bounded validation corpus, prefer the wrapper script. It keeps the mirror refresh, KEV and EPSS fetches, recent ingest window, and quality check in one pass.
+
+`./scripts/ingest_recent_core_db.sh` now takes a lock so two refreshes do not run at the same time. If network refresh is unavailable, set `SKIP_MIRROR_REFRESH=1` and the script will continue with the current local mirrors.
 
 Git pre-commit secret scanning:
 
@@ -30,8 +42,8 @@ Install `gitleaks` first. Common options:
 
 go-exploitdb execution path:
 
-1. Install a matching binary, for example `go install github.com/vulsio/go-exploitdb@v0.7.0`.
-2. Fetch SQLite data, for example `go-exploitdb fetch exploitdb --dbtype sqlite3 --dbpath db/exploit.db`.
+1. Install a matching binary, for example `go install github.com/vulsio/go-exploitdb@latest`.
+2. Fetch SQLite data with the repo wrapper, which defaults to all source families, for example `python3 -m sync.update_exploitdb --binary ~/go/bin/go-exploitdb`.
 3. Validate the generated DB through `sync/exploit_adapter.py`.
 4. Import CVE-linked rows with `python3 -m sync.fetch_exploitdb --db db/exploit.db`.
 
@@ -91,6 +103,7 @@ project/
 Trivy は advisory JSON と compiled DB の両方を扱えます。
 JSON は package advisory の入力として使い、compiled DB は vulnerability metadata の enrichment に使います。
 取得手順とローカル cache の要件は [docs/FEEDS.md](/home/calvet/git/vulnsignal/docs/FEEDS.md) を参照してください。
+`core.db` が他の ingest でロックされている場合は、`VULNSIGNAL_DB_PATH=/tmp/vulnsignal-core.db` のように別 DB を指定して再現用 ingest を回せます。
 
 直読みの実行例:
 
