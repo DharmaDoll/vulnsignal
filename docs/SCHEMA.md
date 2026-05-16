@@ -52,6 +52,26 @@ CREATE TABLE assets (
 );
 ```
 
+### asset_observations
+
+Append-only coarse technology observations for an asset. Use this when you know the system is running a family or stack, but not the exact version.
+
+```sql
+CREATE TABLE asset_observations (
+  id           INTEGER PRIMARY KEY,
+  asset_id     TEXT NOT NULL REFERENCES assets(asset_id),
+  kind         TEXT NOT NULL,      -- 'os' | 'framework' | 'runtime' | 'middleware' | 'product' | 'language'
+  name         TEXT NOT NULL,      -- normalized label such as 'Ubuntu' or 'Nuxt.js'
+  version      TEXT,               -- coarse version like '22' or '3.x'
+  confidence   REAL NOT NULL DEFAULT 0.5,
+  source       TEXT NOT NULL,
+  details_json TEXT,
+  observed_at  TEXT NOT NULL
+);
+```
+
+This table is intentionally coarse. It exists so the platform can rank risk from partial observations like `Ubuntu 22` or `Nuxt.js` even when exact package versions are unavailable.
+
 ### findings
 
 Join of asset × vulnerability. Represents a known-affected combination.
@@ -162,5 +182,7 @@ CREATE INDEX idx_signals_observed_at  ON signals(observed_at);
 CREATE INDEX idx_findings_vuln_id     ON findings(vuln_id);
 CREATE INDEX idx_findings_asset_id    ON findings(asset_id);
 CREATE INDEX idx_findings_risk_score  ON findings(risk_score DESC);
+CREATE INDEX idx_asset_observations_asset_kind ON asset_observations(asset_id, kind, observed_at DESC);
+CREATE INDEX idx_asset_observations_observed_at ON asset_observations(observed_at);
 CREATE INDEX idx_fetch_log_feed       ON fetch_log(feed, attempted_at DESC);
 ```

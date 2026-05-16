@@ -90,21 +90,43 @@ GROUP BY source
 ORDER BY total DESC, source;
 ```
 
-## 8. Representative examples
+## 8. EPSS coverage and values
 
 ```sql
-SELECT vuln_id, source, title, severity, cvss_score, published_at
+SELECT
+  count(*) AS total_recent,
+  sum(CASE WHEN e.vuln_id IS NOT NULL THEN 1 ELSE 0 END) AS with_epss
+FROM vulnerabilities v
+LEFT JOIN epss_current e ON e.vuln_id = v.vuln_id
+WHERE v.published_at >= :cutoff;
+```
+
+```sql
+SELECT v.vuln_id, v.source, v.title, e.epss, e.percentile, e.score_date
+FROM vulnerabilities v
+LEFT JOIN epss_current e ON e.vuln_id = v.vuln_id
+WHERE v.published_at >= :cutoff
+ORDER BY COALESCE(e.epss, -1) DESC, v.published_at DESC
+LIMIT 10;
+```
+
+## 9. Representative examples
+
+```sql
+SELECT v.vuln_id, v.source, v.title, v.severity, v.cvss_score, e.epss, v.published_at
 FROM vulnerabilities
-WHERE published_at >= :cutoff
-  AND cvss_score IS NOT NULL
-ORDER BY cvss_score DESC, published_at DESC
+LEFT JOIN epss_current e ON e.vuln_id = v.vuln_id
+WHERE v.published_at >= :cutoff
+  AND v.cvss_score IS NOT NULL
+ORDER BY v.cvss_score DESC, COALESCE(e.epss, -1) DESC, v.published_at DESC
 LIMIT 10;
 ```
 
 ```sql
-SELECT DISTINCT v.vuln_id, v.source, v.title, v.severity, v.published_at
+SELECT DISTINCT v.vuln_id, v.source, v.title, v.severity, e.epss, v.published_at
 FROM vulnerabilities v
 JOIN signals s ON s.vuln_id = v.vuln_id
+LEFT JOIN epss_current e ON e.vuln_id = v.vuln_id
 WHERE v.published_at >= :cutoff
   AND s.signal_type IN ('exploit', 'kev')
 ORDER BY v.published_at DESC, v.vuln_id
@@ -117,3 +139,4 @@ LIMIT 10;
 - Run the same query set every time.
 - Report counts as distinct vuln_ids unless explicitly saying "signals".
 - Mention when `assets` and `findings` are absent.
+- Always include EPSS in representative examples and ranked vulnerability lists.

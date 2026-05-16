@@ -62,6 +62,8 @@ Use `ATTACH DATABASE` for cross-DB queries only when necessary. ETL summaries in
 
 **Trust hierarchy over last-write-wins.** Multiple feeds may report conflicting severity data. Resolution is deterministic and starts with GHSA, Vulnrichment, and Trivy JSON. The CVE Program is the canonical CVE identifier/reference backbone; NVD is optional enrichment in the current phase. See `FEEDS.md`.
 
+**Coarse asset observations are useful.** Exact package versions are ideal, but the platform should still retain weaker observations like `Ubuntu 22` or `Nuxt.js` as append-only evidence. They are not CMDB truth, but they are strong enough to improve prioritization when version-level inventory is incomplete.
+
 **VEX is a hard suppression.** A vendor `not_affected` assertion overrides CVSS/KEV signals and excludes the item from ranking. Not a soft weight — a business decision.
 
 **Scoring is versioned.** Formula changes increment `scoring_version`. Historical decisions remain interpretable.

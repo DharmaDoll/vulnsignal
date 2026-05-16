@@ -31,6 +31,7 @@ free-form one-off summary.
    - severity mix
    - signal mix by `signal_type`
    - overlap between `enrichment`, `package_advisory`, `exploit`, `kev`, and `epss`
+   - EPSS coverage and representative EPSS values for notable vulnerabilities
    - CVSS coverage by source
    - notable high-risk examples
    - caveats and gaps
@@ -51,12 +52,19 @@ Use this structure:
 8. Representative examples
 9. Short conclusion
 
+EPSS requirement:
+
+- Every report must include EPSS values for notable vulnerabilities.
+- If a vulnerability has an `epss_current` row, show the numeric EPSS value.
+- If a vulnerability has no EPSS row, state `EPSS: missing` explicitly.
+
 ## Guardrails
 
 - Do not query external feeds.
 - Do not invent values when `assets` or `findings` are absent.
 - Do not mix raw feed counts with distinct vuln_id counts without labeling the difference.
 - If the user asks for "last 3 years", use an explicit ISO cutoff derived from the current date.
+- Include EPSS in ranked vulnerability lists and representative examples.
 
 ## Reference queries
 
