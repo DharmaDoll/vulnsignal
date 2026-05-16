@@ -5,7 +5,7 @@ import argparse
 from itertools import islice
 from pathlib import Path
 
-from sync.common import ROOT, FetchResult, JsonArrayCacheWriter, append_signal, connect, log_fetch, read_cache, upsert_vulnerability, utc_now
+from sync.common import ROOT, FetchResult, JsonArrayCacheWriter, append_signal, connect, git_changed_files, log_fetch, read_cache, upsert_vulnerability, utc_now
 from sync.trivy_adapter import iter_advisories_from_directory
 
 
@@ -50,6 +50,7 @@ def sync(
     limit: int | None = None,
     dry_run: bool = False,
     min_year: int = MIN_YEAR,
+    changed_since_ref: str | None = None,
 ) -> FetchResult:
     conn = None
     written = 0
@@ -57,17 +58,67 @@ def sync(
     try:
         targets = targets or list(DEFAULT_TARGETS)
         observed_at = utc_now()
+        source_files = [source_dir / rel for rel in git_changed_files(source_dir, changed_since_ref)] if changed_since_ref is not None else None
         if dry_run:
-            advisories = list(islice(iter_advisories_from_directory(source_dir, observed_at, targets=targets), limit)) if limit is not None else list(iter_advisories_from_directory(source_dir, observed_at, targets=targets))
+            advisory_source = iter_advisories_from_directory(source_dir, observed_at, targets=targets, source_files=source_files)
+            advisories = list(islice(advisory_source, limit)) if limit is not None else list(advisory_source)
             fetched = len(advisories)
             return FetchResult(rows_fetched=fetched, rows_written=0, cache_used=False)
-        advisory_iter = iter_advisories_from_directory(source_dir, observed_at, targets=targets)
+        advisory_iter = iter_advisories_from_directory(source_dir, observed_at, targets=targets, source_files=source_files)
         if limit is not None:
             advisory_iter = islice(advisory_iter, limit)
-        cache_writer = JsonArrayCacheWriter(FEED)
+        cache_writer = None if changed_since_ref is not None else JsonArrayCacheWriter(FEED)
 
         conn = connect()
-        with cache_writer as cache:
+        if cache_writer is not None:
+            with cache_writer as cache:
+                for advisory in advisory_iter:
+                    fetched += 1
+                    if not _keep_for_core_db_min_year(advisory, min_year):
+                        continue
+                    upsert_vulnerability(
+                        conn,
+                        vuln_id=advisory.vuln_id,
+                        source="trivy",
+                        title=advisory.title,
+                        summary=advisory.summary,
+                        severity=advisory.severity,
+                    )
+                    if append_signal(
+                        conn,
+                        vuln_id=advisory.vuln_id,
+                        signal_type="package_advisory",
+                        provider=PROVIDER,
+                        score=None,
+                        value={
+                            "ecosystem": advisory.ecosystem,
+                            "package_name": advisory.package_name,
+                            "affected_versions": advisory.affected_versions,
+                            "fixed_version": advisory.fixed_version,
+                            "severity": advisory.severity,
+                            "source_path": str(source_dir),
+                        },
+                        observed_at=advisory.observed_at,
+                    ):
+                        written += 1
+                    cache.write(
+                        {
+                            "vuln_id": advisory.vuln_id,
+                            "source": "trivy",
+                            "ecosystem": advisory.ecosystem,
+                            "package_name": advisory.package_name,
+                            "affected_versions": advisory.affected_versions,
+                            "fixed_version": advisory.fixed_version,
+                            "severity": advisory.severity,
+                            "observed_at": advisory.observed_at,
+                            "published_at": advisory.published_at,
+                            "source_path": advisory.source_path,
+                            "title": advisory.title,
+                            "summary": advisory.summary,
+                        }
+                    )
+                cache.commit()
+        else:
             for advisory in advisory_iter:
                 fetched += 1
                 if not _keep_for_core_db_min_year(advisory, min_year):
@@ -97,23 +148,6 @@ def sync(
                     observed_at=advisory.observed_at,
                 ):
                     written += 1
-                cache.write(
-                    {
-                        "vuln_id": advisory.vuln_id,
-                        "source": "trivy",
-                        "ecosystem": advisory.ecosystem,
-                        "package_name": advisory.package_name,
-                        "affected_versions": advisory.affected_versions,
-                        "fixed_version": advisory.fixed_version,
-                        "severity": advisory.severity,
-                        "observed_at": advisory.observed_at,
-                        "published_at": advisory.published_at,
-                        "source_path": advisory.source_path,
-                        "title": advisory.title,
-                        "summary": advisory.summary,
-                    }
-                )
-            cache.commit()
         log_fetch(conn, FEED, "ok", written)
         conn.commit()
         return FetchResult(rows_fetched=fetched, rows_written=written, cache_used=False)
@@ -141,6 +175,7 @@ def main() -> None:
     parser.add_argument("--target", action="append", choices=DEFAULT_TARGETS, help="Limit to one target directory. Can be repeated.")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--changed-since-ref", help="Only ingest files changed since the given git ref, e.g. HEAD@{1}.")
     parser.add_argument(
         "--min-year",
         type=int,
@@ -154,6 +189,7 @@ def main() -> None:
         limit=args.limit,
         dry_run=args.dry_run,
         min_year=args.min_year,
+        changed_since_ref=args.changed_since_ref,
     )
     print(result)
 

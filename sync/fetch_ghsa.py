@@ -12,6 +12,7 @@ from sync.common import (
     JsonArrayCacheWriter,
     append_signal,
     connect,
+    git_changed_files,
     log_fetch,
     read_cache,
     upsert_vulnerability,
@@ -88,7 +89,24 @@ def _candidate_roots(source_dir: Path, include_unreviewed: bool) -> list[Path]:
     return [source_dir]
 
 
-def _iter_json_files(source_dir: Path, include_unreviewed: bool) -> list[Path]:
+def _iter_json_files(
+    source_dir: Path,
+    include_unreviewed: bool,
+    source_files: list[Path] | None = None,
+) -> list[Path]:
+    if source_files is not None:
+        roots = _candidate_roots(source_dir, include_unreviewed)
+        allowed_roots = [root.resolve() for root in roots if root.exists()]
+        paths: list[Path] = []
+        for path in source_files:
+            resolved = path.resolve()
+            if resolved.suffix != ".json":
+                continue
+            if allowed_roots and not any(str(resolved).startswith(str(root)) for root in allowed_roots):
+                continue
+            if resolved.is_file():
+                paths.append(resolved)
+        return sorted(paths)
     paths: list[Path] = []
     for root in _candidate_roots(source_dir, include_unreviewed):
         if root.is_file() and root.suffix == ".json":
@@ -98,8 +116,12 @@ def _iter_json_files(source_dir: Path, include_unreviewed: bool) -> list[Path]:
     return paths
 
 
-def _iter_rows_from_source_dir(source_dir: Path, include_unreviewed: bool) -> Any:
-    for path in _iter_json_files(source_dir, include_unreviewed):
+def _iter_rows_from_source_dir(
+    source_dir: Path,
+    include_unreviewed: bool,
+    source_files: list[Path] | None = None,
+) -> Any:
+    for path in _iter_json_files(source_dir, include_unreviewed, source_files=source_files):
         payload = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             continue
@@ -273,6 +295,7 @@ def sync(
     cache_only: bool = False,
     include_unreviewed: bool = False,
     min_year: int = MIN_YEAR,
+    changed_since_ref: str | None = None,
 ) -> FetchResult:
     conn = None
     written = 0
@@ -289,7 +312,10 @@ def sync(
             advisory_iter = iter(rows)
             cache_writer = None
         else:
-            advisory_iter = _iter_rows_from_source_dir(source_dir, include_unreviewed)
+            source_files = None
+            if changed_since_ref is not None:
+                source_files = [source_dir / rel for rel in git_changed_files(source_dir, changed_since_ref)]
+            advisory_iter = _iter_rows_from_source_dir(source_dir, include_unreviewed, source_files=source_files)
             if limit is not None:
                 from itertools import islice
 
@@ -298,7 +324,7 @@ def sync(
                 rows = list(advisory_iter)
                 fetched = len(rows)
                 return FetchResult(rows_fetched=fetched, rows_written=0, cache_used=cache_used)
-            cache_writer = JsonArrayCacheWriter(FEED)
+            cache_writer = None if changed_since_ref is not None else JsonArrayCacheWriter(FEED)
 
         conn = connect()
         if cache_writer is not None:
@@ -461,6 +487,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--cache-only", action="store_true")
     parser.add_argument("--include-unreviewed", action="store_true")
+    parser.add_argument("--changed-since-ref", help="Only ingest files changed since the given git ref, e.g. HEAD@{1}.")
     parser.add_argument(
         "--min-year",
         type=int,
@@ -475,6 +502,7 @@ def main() -> None:
         cache_only=args.cache_only,
         include_unreviewed=args.include_unreviewed,
         min_year=args.min_year,
+        changed_since_ref=args.changed_since_ref,
     )
     print(result)
 

@@ -20,14 +20,16 @@ if [ "${SKIP_MIRROR_REFRESH:-0}" != "1" ]; then
   fi
 fi
 
-python3 -m sync.fetch_cve_program --min-year "$MIN_YEAR"
+python3 -m sync.fetch_cve_program --min-year "$MIN_YEAR" --changed-since-ref "HEAD@{1}"
 python3 -m sync.fetch_kev
 python3 -m sync.fetch_epss
-python3 -m sync.fetch_ghsa --min-year "$MIN_YEAR"
-python3 -m sync.fetch_trivy_vuln_list --min-year "$MIN_YEAR"
-python3 -m sync.fetch_vulnrichment --min-year "$MIN_YEAR"
+python3 -m sync.fetch_ghsa --min-year "$MIN_YEAR" --changed-since-ref "HEAD@{1}"
+python3 -m sync.fetch_trivy_vuln_list --min-year "$MIN_YEAR" --changed-since-ref "HEAD@{1}"
+python3 -m sync.fetch_vulnrichment --min-year "$MIN_YEAR" --changed-since-ref "HEAD@{1}"
 
-if [ -d "db/trivy_cache.db" ]; then
+if [ "${SKIP_TRIVY_DB:-0}" = "1" ]; then
+  printf '%s\n' "skip: trivy db ingest disabled by SKIP_TRIVY_DB=1"
+elif [ -d "db/trivy_cache.db" ]; then
   python3 -m sync.fetch_trivy_db --db-dir db/trivy_cache.db --min-year "$MIN_YEAR"
 else
   printf '%s\n' "skip: db/trivy_cache.db not found"

@@ -58,6 +58,14 @@ def upsert_epss_current(conn, vuln_id: str, epss: float, percentile: float | Non
     )
 
 
+def load_current_epss(conn) -> dict[str, tuple[float, float | None]]:
+    rows = conn.execute("SELECT vuln_id, epss, percentile FROM epss_current").fetchall()
+    current: dict[str, tuple[float, float | None]] = {}
+    for row in rows:
+        current[str(row["vuln_id"])] = (float(row["epss"]), float(row["percentile"]) if row["percentile"] is not None else None)
+    return current
+
+
 def sync(
     limit: int | None = None,
     dry_run: bool = False,
@@ -76,13 +84,18 @@ def sync(
     conn = connect()
     written = 0
     try:
+        current = load_current_epss(conn)
         for item in rows:
             vuln_id = item.get("cve")
             if not vuln_id:
                 continue
             epss = float(item.get("epss") or 0)
             percentile = float(item["percentile"]) if item.get("percentile") else None
+            previous = current.get(vuln_id)
+            if previous is not None and previous == (epss, percentile):
+                continue
             upsert_epss_current(conn, vuln_id, epss, percentile, score_date)
+            current[vuln_id] = (epss, percentile)
             written += 1
         log_fetch(conn, FEED, "ok", written)
         conn.commit()

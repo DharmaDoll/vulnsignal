@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from contextlib import closing
 
 from sync.common import ROOT, FetchResult, append_signal, connect, log_fetch, upsert_vulnerability, utc_now
 from sync.trivy_adapter import (
     TRIVY_DB_SCHEMA_VERSION,
-    iter_vulnerabilities_from_db,
+    iter_trivy_db_dump_rows,
     load_vulnerabilities_from_db_cache_only,
+    load_trivy_vulnerability_fingerprints_from_cache,
+    vulnerability_from_payload,
 )
 
 
@@ -47,52 +48,63 @@ def sync(
     cache_used = False
     try:
         observed_at = utc_now()
+        previous_fingerprints = load_trivy_vulnerability_fingerprints_from_cache(expected_schema_version)
         if dry_run:
-            with closing(iter_vulnerabilities_from_db(db_dir, observed_at, expected_schema_version)) as vulnerability_iter:
-                for vulnerability in vulnerability_iter:
-                    if limit is not None and fetched >= limit:
-                        break
-                    fetched += 1
+            for row in iter_trivy_db_dump_rows(db_dir, expected_schema_version):
+                if row.get("row_type") != "vulnerability":
+                    continue
+                if limit is not None and fetched >= limit:
+                    break
+                fetched += 1
             return FetchResult(rows_fetched=fetched, rows_written=0, cache_used=False)
 
         conn = connect()
         try:
-            with closing(iter_vulnerabilities_from_db(db_dir, observed_at, expected_schema_version)) as vulnerability_iter:
-                for vulnerability in vulnerability_iter:
-                    if limit is not None and fetched >= limit:
-                        break
-                    fetched += 1
-                    if not _keep_for_core_db(vulnerability, min_year):
-                        continue
-                    upsert_vulnerability(
-                        conn,
-                        vuln_id=vulnerability.vuln_id,
-                        source="trivy-db",
-                        title=vulnerability.title,
-                        summary=vulnerability.summary,
-                        severity=vulnerability.severity,
-                        cvss_score=vulnerability.cvss_score,
-                        cvss_source="Trivy DB",
-                    )
-                    if append_signal(
-                        conn,
-                        vuln_id=vulnerability.vuln_id,
-                        signal_type="enrichment",
-                        provider=PROVIDER,
-                        score=vulnerability.cvss_score,
-                        value={
-                            "title": vulnerability.title,
-                            "summary": vulnerability.summary,
-                            "severity": vulnerability.severity,
-                            "cvss_score": vulnerability.cvss_score,
-                            "cvss_vector": vulnerability.cvss_vector,
-                            "vendor_severity": vulnerability.vendor_severity,
-                            "references": vulnerability.references,
-                            "source_path": str(db_dir),
-                        },
-                        observed_at=vulnerability.observed_at,
-                    ):
-                        written += 1
+            for row in iter_trivy_db_dump_rows(db_dir, expected_schema_version):
+                if row.get("row_type") != "vulnerability":
+                    continue
+                vuln_id = row.get("vuln_id")
+                payload = row.get("payload")
+                payload_hash = row.get("payload_hash")
+                if not isinstance(vuln_id, str) or not isinstance(payload, dict):
+                    continue
+                if limit is not None and fetched >= limit:
+                    break
+                fetched += 1
+                if previous_fingerprints.get(vuln_id) == payload_hash:
+                    continue
+                vulnerability = vulnerability_from_payload(vuln_id, payload, observed_at, source_hint="trivy-db")
+                if not _keep_for_core_db(vulnerability, min_year):
+                    continue
+                upsert_vulnerability(
+                    conn,
+                    vuln_id=vulnerability.vuln_id,
+                    source="trivy-db",
+                    title=vulnerability.title,
+                    summary=vulnerability.summary,
+                    severity=vulnerability.severity,
+                    cvss_score=vulnerability.cvss_score,
+                    cvss_source="Trivy DB",
+                )
+                if append_signal(
+                    conn,
+                    vuln_id=vulnerability.vuln_id,
+                    signal_type="enrichment",
+                    provider=PROVIDER,
+                    score=vulnerability.cvss_score,
+                    value={
+                        "title": vulnerability.title,
+                        "summary": vulnerability.summary,
+                        "severity": vulnerability.severity,
+                        "cvss_score": vulnerability.cvss_score,
+                        "cvss_vector": vulnerability.cvss_vector,
+                        "vendor_severity": vulnerability.vendor_severity,
+                        "references": vulnerability.references,
+                        "source_path": str(db_dir),
+                    },
+                    observed_at=vulnerability.observed_at,
+                ):
+                    written += 1
             log_fetch(conn, FEED, "ok", written)
             conn.commit()
             return FetchResult(rows_fetched=fetched, rows_written=written, cache_used=False)

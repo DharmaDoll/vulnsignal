@@ -12,6 +12,7 @@ from sync.common import (
     JsonArrayCacheWriter,
     append_signal,
     connect,
+    git_changed_files,
     log_fetch,
     read_cache,
     upsert_vulnerability,
@@ -57,7 +58,9 @@ def _keep_for_core_db(item: dict[str, Any], min_year: int) -> bool:
     return True
 
 
-def _iter_source_files(source_dir: Path) -> list[Path]:
+def _iter_source_files(source_dir: Path, source_files: list[Path] | None = None) -> list[Path]:
+    if source_files is not None:
+        return [path for path in source_files if path.is_file()]
     if source_dir.is_file():
         return [source_dir]
     return sorted(path for path in source_dir.rglob("*.json") if path.is_file())
@@ -257,8 +260,8 @@ def _record_from_item(item: dict[str, Any], source_path: Path) -> dict[str, Any]
     }
 
 
-def _load_rows_from_source_dir(source_dir: Path) -> list[dict[str, Any]]:
-    for path in _iter_source_files(source_dir):
+def _load_rows_from_source_dir(source_dir: Path, source_files: list[Path] | None = None) -> list[dict[str, Any]]:
+    for path in _iter_source_files(source_dir, source_files):
         payload = _parse_json(path)
         items = payload if isinstance(payload, list) else [payload]
         for item in items:
@@ -287,6 +290,7 @@ def sync(
     dry_run: bool = False,
     cache_only: bool = False,
     min_year: int = MIN_YEAR,
+    changed_since_ref: str | None = None,
 ) -> FetchResult:
     conn = None
     written = 0
@@ -303,7 +307,10 @@ def sync(
             row_iter = iter(rows)
             cache_writer = None
         else:
-            row_iter = _load_rows_from_source_dir(source_dir)
+            source_files = None
+            if changed_since_ref is not None:
+                source_files = [source_dir / rel for rel in git_changed_files(source_dir, changed_since_ref)]
+            row_iter = _load_rows_from_source_dir(source_dir, source_files=source_files)
             if limit is not None:
                 from itertools import islice
 
@@ -312,7 +319,7 @@ def sync(
                 rows = list(row_iter)
                 fetched = len(rows)
                 return FetchResult(rows_fetched=fetched, rows_written=0, cache_used=cache_used)
-            cache_writer = JsonArrayCacheWriter(FEED)
+            cache_writer = None if changed_since_ref is not None else JsonArrayCacheWriter(FEED)
 
         conn = connect()
         if cache_writer is not None:
@@ -350,8 +357,8 @@ def sync(
                             "source_path": item.get("source_path"),
                         },
                         observed_at=utc_now(),
-                    ):
-                        written += 1
+                        ):
+                            written += 1
                 cache.commit()
         else:
             for item in row_iter:
@@ -410,6 +417,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--cache-only", action="store_true")
+    parser.add_argument("--changed-since-ref", help="Only ingest files changed since the given git ref, e.g. HEAD@{1}.")
     parser.add_argument("--min-year", type=int, default=MIN_YEAR, help="Only write records published in this year or later to core.db.")
     args = parser.parse_args()
     result = sync(
@@ -418,6 +426,7 @@ def main() -> None:
         dry_run=args.dry_run,
         cache_only=args.cache_only,
         min_year=args.min_year,
+        changed_since_ref=args.changed_since_ref,
     )
     print(result)
 

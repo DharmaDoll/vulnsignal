@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -20,7 +21,13 @@ type dumpRecord struct {
 	VulnID      string          `json:"vuln_id"`
 	PackageName string          `json:"package_name,omitempty"`
 	SourcePath  []string        `json:"source_path,omitempty"`
+	PayloadHash string          `json:"payload_hash,omitempty"`
 	Payload     json.RawMessage `json:"payload"`
+}
+
+func payloadHash(payload json.RawMessage) string {
+	sum := sha256.Sum256(payload)
+	return fmt.Sprintf("%x", sum[:])
 }
 
 func readMetadata(dbDir string) (metadata, error) {
@@ -52,6 +59,7 @@ func emitBucketLeaves(enc *json.Encoder, bkt *bolt.Bucket, vulnID string, path [
 			VulnID:      vulnID,
 			PackageName: string(k),
 			SourcePath:  append([]string(nil), path[1:]...),
+			PayloadHash: payloadHash(v),
 			Payload:     json.RawMessage(v),
 		}
 		return enc.Encode(record)
@@ -75,9 +83,10 @@ func dumpTrivyDB(dbDir string) error {
 					return nil
 				}
 				return enc.Encode(dumpRecord{
-					RowType: "vulnerability",
-					VulnID:  string(k),
-					Payload: json.RawMessage(v),
+					RowType:     "vulnerability",
+					VulnID:      string(k),
+					PayloadHash: payloadHash(v),
+					Payload:     json.RawMessage(v),
 				})
 			}); err != nil {
 				return err

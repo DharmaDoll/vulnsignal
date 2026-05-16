@@ -11,6 +11,8 @@ Current task plan: `docs/ROADMAP.md`
 
 ## Absolute rules
 
+- **Prefer local sources first.** For any repository analysis, use local code, docs, and `db/core.db` before external web sources.
+- **Use external sources only when needed.** Fall back to web lookups only when local sources cannot answer the question or the user explicitly asks for current external information.
 - **Never query external DBs directly.** All access to Trivy DB and go-exploitdb must go through their adapter modules (`sync/trivy_adapter.py`, `sync/exploit_adapter.py`).
 - **Never delete signal history.** Signals table is append-only. Use `observed_at` for ordering.
 - **Never overwrite higher-trust data with lower-trust data.** See trust hierarchy in `docs/FEEDS.md`.

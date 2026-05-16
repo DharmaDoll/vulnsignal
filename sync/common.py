@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import subprocess
 import tempfile
 import time
 from contextlib import AbstractContextManager
@@ -66,6 +67,31 @@ def fetch_json(url: str, headers: dict[str, str] | None = None, attempts: int = 
         return json.loads(fetch_text(url, headers=headers, attempts=attempts))
     except json.JSONDecodeError as exc:
         raise FetchError(str(exc)) from exc
+
+
+def git_changed_files(source_dir: Path, since_ref: str) -> list[Path]:
+    repo_dir = source_dir if source_dir.is_dir() else source_dir.parent
+    try:
+        subprocess.run(
+            ["git", "-C", str(repo_dir), "rev-parse", "--verify", since_ref],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise FetchError(f"invalid git ref {since_ref!r} in {repo_dir}") from exc
+
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_dir), "diff", "--name-only", "--diff-filter=AM", f"{since_ref}..HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise FetchError(f"unable to compute git diff for {repo_dir}") from exc
+
+    return [Path(line) for line in result.stdout.splitlines() if line.endswith(".json")]
 
 
 def cache_path(feed: str, suffix: str = "json") -> Path:
