@@ -313,6 +313,26 @@ For a bounded validation ingest, add `--min-year 2024`.
 - Requires API key (`config/settings.yaml` → `nvd.api_key`) for reliable throughput
 - Signal type: `enrichment`
 
+## Assets
+
+- Source: local CSV export from inventory / discovery tooling
+- Current phase: import coarse asset records plus append-only technology observations
+- Primary command: `python3 -m sync.import_assets_csv --csv data/assets.csv`
+
+Supported CSV columns:
+
+- Required: `asset_id`, `hostname`
+- Asset fields: `os`, `os_version`, `version`, `owner`, `exposed`, `criticality`
+- Observation fields: `kind`, `name`, `version`, `confidence`, `source`, `observed_at`, `details_json`
+- Convenience observation fields: `software`, `software_version`, `product`, `product_version`, `middleware`, `middleware_version`, `framework`, `framework_version`, `runtime`, `runtime_version`, `language`, `language_version`
+
+Behavior:
+
+- `assets` is updated conservatively so existing non-empty values are preserved.
+- `asset_observations` is append-only and skips exact duplicates.
+- If both the generic observation fields and convenience fields are present, the importer records each observation separately.
+- A row without `asset_id` or `hostname` is skipped.
+
 ## VEX / CSAF / OpenVEX
 
 - Per-vendor CSAF feeds or OpenVEX documents

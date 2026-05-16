@@ -11,7 +11,7 @@ Key decisions:
 - GHSA is a core feed.
 - Trivy supports advisory JSON and direct DB ingestion.
 - VEX `not_affected` excludes items from rankings.
-- Assets are expected to start as CSV import, with the exact format still open.
+- Assets start as CSV import, including coarse technology observations like OS / framework / middleware.
 - Feed quality should be judged with simple per-feed metrics and a combined operational assessment.
 
 ## Task Plan
@@ -32,7 +32,7 @@ Key decisions:
 |Done|Trivy vuln-list fetcher|Fetch selected JSON trees from `aquasecurity/vuln-list` and pass them through `sync/trivy_adapter.py`|
 |Done|GHSA pagination fix|Remove the sample-style row cap and fetch GHSA through full pagination or incremental updates|
 |Done|Vulnrichment ingestion|Sample import writes severity/CVSS/summary enrichment without overwriting higher-trust data|
-|Planned|Asset CSV importer|CSV import creates or updates `assets` with conservative defaults|
+|Done|Asset CSV importer|CSV import creates or updates `assets` and `asset_observations` with conservative defaults|
 |Done|Minimal scoring/ranking|v1 scoring works from latest signals and ranking excludes VEX `not_affected`|
 |Planned|Minimal Skills API|`find_vuln`, `top_risks`, `has_exploit`, and `data_freshness` work from local DB|
 
@@ -81,7 +81,6 @@ All direct DB access stays inside `sync/trivy_adapter.py` and the dedicated Triv
 
 ## Open Questions
 
-- Exact asset CSV columns and required fields.
 - Whether GHSA `unreviewed` advisories should be included after reviewed advisories are stable.
 - Whether GHSA should be fetched as full pagination or updated incrementally by `updated_at`.
 - Whether to run all go-exploitdb sources by default or keep a smaller source set for routine refresh.

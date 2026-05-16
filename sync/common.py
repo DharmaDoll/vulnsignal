@@ -292,6 +292,98 @@ def upsert_vulnerability(
             cvss_score,
             cvss_source,
             published_at,
-            updated_at,
+        updated_at,
+    ),
+    )
+
+
+def upsert_asset(
+    conn: sqlite3.Connection,
+    asset_id: str,
+    hostname: str,
+    os: str | None = None,
+    version: str | None = None,
+    owner: str | None = None,
+    exposed: int | None = None,
+    criticality: str | None = None,
+) -> None:
+    before = conn.total_changes
+    conn.execute(
+        """
+        INSERT INTO assets (
+          asset_id, hostname, os, version, owner, exposed, criticality
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(asset_id) DO UPDATE SET
+          hostname = CASE
+            WHEN assets.hostname IS NULL OR trim(assets.hostname) = '' THEN excluded.hostname
+            ELSE assets.hostname
+          END,
+          os = COALESCE(assets.os, excluded.os),
+          version = COALESCE(assets.version, excluded.version),
+          owner = COALESCE(assets.owner, excluded.owner),
+          exposed = COALESCE(assets.exposed, excluded.exposed),
+          criticality = COALESCE(assets.criticality, excluded.criticality)
+        WHERE
+          (assets.hostname IS NULL OR trim(assets.hostname) = '')
+          OR (assets.os IS NULL AND excluded.os IS NOT NULL)
+          OR (assets.version IS NULL AND excluded.version IS NOT NULL)
+          OR (assets.owner IS NULL AND excluded.owner IS NOT NULL)
+          OR (assets.exposed IS NULL AND excluded.exposed IS NOT NULL)
+          OR (assets.criticality IS NULL AND excluded.criticality IS NOT NULL)
+        """,
+        (asset_id, hostname, os, version, owner, exposed, criticality),
+    )
+    return conn.total_changes > before
+
+
+def append_asset_observation(
+    conn: sqlite3.Connection,
+    asset_id: str,
+    kind: str,
+    name: str,
+    version: str | None = None,
+    confidence: float = 0.5,
+    source: str = "csv",
+    details: dict[str, Any] | None = None,
+    observed_at: str | None = None,
+) -> bool:
+    details_json = json.dumps(details or {}, sort_keys=True, ensure_ascii=False) if details is not None else None
+    before = conn.total_changes
+    conn.execute(
+        """
+        INSERT INTO asset_observations (
+          asset_id, kind, name, version, confidence, source, details_json, observed_at
+        )
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM asset_observations
+          WHERE asset_id = ?
+            AND kind = ?
+            AND name = ?
+            AND COALESCE(version, '') = COALESCE(?, '')
+            AND COALESCE(confidence, -1) = COALESCE(?, -1)
+            AND source = ?
+            AND COALESCE(details_json, '') = COALESCE(?, '')
+        )
+        """,
+        (
+            asset_id,
+            kind,
+            name,
+            version,
+            confidence,
+            source,
+            details_json,
+            observed_at or utc_now(),
+            asset_id,
+            kind,
+            name,
+            version,
+            confidence,
+            source,
+            details_json,
         ),
     )
+    return conn.total_changes > before
