@@ -133,6 +133,43 @@ ORDER BY v.published_at DESC, v.vuln_id
 LIMIT 10;
 ```
 
+## 10. Recent exploit risks
+
+```sql
+WITH recent AS (
+  SELECT vuln_id, source, title, severity, cvss_score, published_at
+  FROM vulnerabilities
+  WHERE published_at >= :cutoff
+),
+latest AS (
+  SELECT vuln_id, signal_type, observed_at, id,
+         row_number() OVER (PARTITION BY vuln_id, signal_type ORDER BY observed_at DESC, id DESC) AS rn
+  FROM signals
+),
+flags AS (
+  SELECT r.vuln_id, r.source, r.title, r.severity, COALESCE(r.cvss_score, 0) AS cvss_score, r.published_at,
+         max(CASE WHEN l.signal_type = 'kev' THEN 1 ELSE 0 END) AS kev_present,
+         max(CASE WHEN l.signal_type = 'exploit' THEN 1 ELSE 0 END) AS exploit_present
+  FROM recent r
+  LEFT JOIN latest l ON l.vuln_id = r.vuln_id AND l.rn = 1
+  GROUP BY r.vuln_id
+)
+SELECT f.vuln_id,
+       f.published_at,
+       f.source,
+       f.severity,
+       f.cvss_score,
+       COALESCE(e.epss, 0) AS epss,
+       ROUND(f.cvss_score * 4.0 + COALESCE(e.epss, 0) * 20.0 + CASE WHEN f.kev_present = 1 THEN 15 ELSE 0 END + CASE WHEN f.exploit_present = 1 THEN 10 ELSE 0 END, 2) AS score,
+       CASE WHEN f.kev_present = 1 THEN 'kev ' ELSE '' END || CASE WHEN f.exploit_present = 1 THEN 'exploit' ELSE '' END AS signals,
+       f.title
+FROM flags f
+LEFT JOIN epss_current e ON e.vuln_id = f.vuln_id
+WHERE f.exploit_present = 1
+ORDER BY score DESC, f.kev_present DESC, f.cvss_score DESC, COALESCE(e.epss, 0) DESC, f.published_at DESC
+LIMIT 20;
+```
+
 ## Checklist
 
 - Convert the user request into an explicit cutoff date.
@@ -140,3 +177,4 @@ LIMIT 10;
 - Report counts as distinct vuln_ids unless explicitly saying "signals".
 - Mention when `assets` and `findings` are absent.
 - Always include EPSS in representative examples and ranked vulnerability lists.
+- Always include `published_at` in representative examples and ranked vulnerability lists.

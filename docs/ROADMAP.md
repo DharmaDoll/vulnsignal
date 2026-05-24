@@ -76,6 +76,7 @@ Day 1 interpretation:
 - `vuln-list` is optional unless package-range fidelity becomes the bottleneck.
 - If the main job is to match against existing assets, Trivy JSON and other scanner-aligned feeds can be enough to start.
 - Keep `vuln-list` as a quality-improvement path rather than a blocker for the first usable asset-to-vulnerability workflow.
+- Current judgment on OSV coverage: the `aquasecurity/vuln-list` `osv` target is sufficient for now, so a separate `OSV.dev` ingest is not a priority until coverage or freshness becomes a measurable gap.
 
 All direct DB access stays inside `sync/trivy_adapter.py` and the dedicated Trivy DB dump helper under `cmd/trivydbdump/`.
 
