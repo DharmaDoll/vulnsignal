@@ -61,6 +61,8 @@ local_settings.py
 db.sqlite3
 db.sqlite3-journal
 db/*.db
+db/refresh_recent_core_db.lock
+db/refresh_recent_core_db.refs
 db/cache/
 data/
 

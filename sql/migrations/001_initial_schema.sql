@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS fetch_log (
   attempted_at  TEXT NOT NULL,
   status        TEXT NOT NULL,
   error_msg     TEXT,
-  rows_affected INTEGER
+  rows_affected INTEGER,
+  cache_used    INTEGER NOT NULL DEFAULT 0
 );
 
 PRAGMA user_version = 1;

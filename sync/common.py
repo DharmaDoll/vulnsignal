@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import sqlite3
 import subprocess
 import tempfile
 import time
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -18,6 +20,10 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = Path(os.environ.get("VULNSIGNAL_DB_PATH", str(ROOT / "db" / "core.db")))
 CACHE_DIR = ROOT / "db" / "cache"
+DOH_ENDPOINTS = (
+    "https://1.1.1.1/dns-query",
+    "https://8.8.8.8/resolve",
+)
 
 
 class FetchError(RuntimeError):
@@ -48,11 +54,73 @@ def fetch_bytes(url: str, headers: dict[str, str] | None = None, attempts: int =
         try:
             with urlopen(request, timeout=60) as response:
                 return response.read()
-        except (URLError, TimeoutError) as exc:
+        except (URLError, TimeoutError, socket.gaierror) as exc:
             last_error = exc
+            resolved_ip = _resolve_request_host_via_doh(request)
+            if resolved_ip:
+                try:
+                    with _urlopen_with_resolved_host(request, resolved_ip):
+                        with urlopen(request, timeout=60) as response:
+                            return response.read()
+                except (URLError, TimeoutError, socket.gaierror) as retry_exc:
+                    last_error = retry_exc
             if attempt < attempts - 1:
                 time.sleep(min(300, 5 * (2**attempt)))
     raise FetchError(str(last_error))
+
+
+def _resolve_via_doh(host: str) -> str | None:
+    query_headers = {"Accept": "application/dns-json", "User-Agent": "vulnsignal/0.1"}
+    for endpoint in DOH_ENDPOINTS:
+        try:
+            request = Request(f"{endpoint}?name={host}&type=A", headers=query_headers)
+            with urlopen(request, timeout=15) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            if payload.get("Status") != 0:
+                continue
+            answers = payload.get("Answer") or []
+            for answer in answers:
+                if isinstance(answer, dict) and answer.get("type") == 1 and answer.get("data"):
+                    return str(answer["data"])
+        except Exception:
+            continue
+    return None
+
+
+def _resolve_request_host_via_doh(request: Request) -> str | None:
+    parts = urlsplit(request.full_url)
+    host = parts.hostname
+    if not host:
+        return None
+    try:
+        socket.inet_aton(host)
+        return None
+    except OSError:
+        pass
+
+    return _resolve_via_doh(host)
+
+
+@contextmanager
+def _urlopen_with_resolved_host(request: Request, resolved_ip: str):
+    parts = urlsplit(request.full_url)
+    host = parts.hostname
+    if not host:
+        yield
+        return
+
+    original_getaddrinfo = socket.getaddrinfo
+
+    def patched_getaddrinfo(node: str, port: int | str | None, family=0, type=0, proto=0, flags=0):
+        if node == host:
+            return original_getaddrinfo(resolved_ip, port, family, type, proto, flags)
+        return original_getaddrinfo(node, port, family, type, proto, flags)
+
+    socket.getaddrinfo = patched_getaddrinfo  # type: ignore[assignment]
+    try:
+        yield
+    finally:
+        socket.getaddrinfo = original_getaddrinfo  # type: ignore[assignment]
 
 
 def fetch_text(url: str, headers: dict[str, str] | None = None, attempts: int = 3) -> str:
@@ -203,13 +271,14 @@ def log_fetch(
     status: str,
     rows_affected: int = 0,
     error_msg: str | None = None,
+    cache_used: bool = False,
 ) -> None:
     conn.execute(
         """
-        INSERT INTO fetch_log (feed, attempted_at, status, error_msg, rows_affected)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO fetch_log (feed, attempted_at, status, error_msg, rows_affected, cache_used)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (feed, utc_now(), status, error_msg, rows_affected),
+        (feed, utc_now(), status, error_msg, rows_affected, int(cache_used)),
     )
 
 

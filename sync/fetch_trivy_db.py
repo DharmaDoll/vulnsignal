@@ -7,10 +7,8 @@ from pathlib import Path
 from sync.common import ROOT, FetchResult, append_signal, connect, log_fetch, upsert_vulnerability, utc_now
 from sync.trivy_adapter import (
     TRIVY_DB_SCHEMA_VERSION,
-    iter_trivy_db_dump_rows,
+    iter_vulnerabilities_from_db,
     load_vulnerabilities_from_db_cache_only,
-    load_trivy_vulnerability_fingerprints_from_cache,
-    vulnerability_from_payload,
 )
 
 
@@ -48,11 +46,8 @@ def sync(
     cache_used = False
     try:
         observed_at = utc_now()
-        previous_fingerprints = load_trivy_vulnerability_fingerprints_from_cache(expected_schema_version)
         if dry_run:
-            for row in iter_trivy_db_dump_rows(db_dir, expected_schema_version):
-                if row.get("row_type") != "vulnerability":
-                    continue
+            for vulnerability in iter_vulnerabilities_from_db(db_dir, observed_at, expected_schema_version):
                 if limit is not None and fetched >= limit:
                     break
                 fetched += 1
@@ -60,20 +55,11 @@ def sync(
 
         conn = connect()
         try:
-            for row in iter_trivy_db_dump_rows(db_dir, expected_schema_version):
-                if row.get("row_type") != "vulnerability":
-                    continue
-                vuln_id = row.get("vuln_id")
-                payload = row.get("payload")
-                payload_hash = row.get("payload_hash")
-                if not isinstance(vuln_id, str) or not isinstance(payload, dict):
-                    continue
+            for vulnerability in iter_vulnerabilities_from_db(db_dir, observed_at, expected_schema_version):
+                vuln_id = vulnerability.vuln_id
                 if limit is not None and fetched >= limit:
                     break
                 fetched += 1
-                if previous_fingerprints.get(vuln_id) == payload_hash:
-                    continue
-                vulnerability = vulnerability_from_payload(vuln_id, payload, observed_at, source_hint="trivy-db")
                 if not _keep_for_core_db(vulnerability, min_year):
                     continue
                 upsert_vulnerability(

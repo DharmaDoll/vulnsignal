@@ -69,7 +69,7 @@ def rows(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()) -> li
 def last_fetch(conn: sqlite3.Connection, feed: str) -> sqlite3.Row | None:
     row = conn.execute(
         """
-        SELECT feed, attempted_at, status, rows_affected
+        SELECT feed, attempted_at, status, rows_affected, cache_used
         FROM fetch_log
         WHERE feed = ?
         ORDER BY attempted_at DESC, id DESC
@@ -83,7 +83,7 @@ def last_fetch(conn: sqlite3.Connection, feed: str) -> sqlite3.Row | None:
 def last_success(conn: sqlite3.Connection, feed: str) -> sqlite3.Row | None:
     row = conn.execute(
         """
-        SELECT feed, attempted_at, status, rows_affected
+        SELECT feed, attempted_at, status, rows_affected, cache_used
         FROM fetch_log
         WHERE feed = ? AND status = 'ok'
         ORDER BY attempted_at DESC, id DESC
@@ -100,16 +100,20 @@ def providers_for(feed: str) -> tuple[str, ...]:
 
 def signal_rows(conn: sqlite3.Connection, feed: str) -> list[sqlite3.Row]:
     providers = providers_for(feed)
-    placeholders = ",".join("?" for _ in providers)
-    return rows(
-        conn,
-        f"""
-        SELECT vuln_id, signal_type, provider, value_json
-        FROM signals
-        WHERE provider IN ({placeholders})
-        """,
-        tuple(providers),
-    )
+    items: list[sqlite3.Row] = []
+    for provider in providers:
+        items.extend(
+            rows(
+                conn,
+                """
+                SELECT vuln_id, signal_type, provider, value_json
+                FROM signals
+                WHERE provider = ?
+                """,
+                (provider,),
+            )
+        )
+    return items
 
 
 def epss_current_count(conn: sqlite3.Connection) -> int:
@@ -200,6 +204,7 @@ def summarize_feed(conn: sqlite3.Connection, feed: str) -> dict[str, Any]:
             "staleness_status": staleness_status(feed, success["attempted_at"] if success else None),
             "last_fetch_status": fetch["status"] if fetch else "missing",
             "last_rows_affected": fetch["rows_affected"] if fetch else None,
+            "last_cache_used": bool(fetch["cache_used"]) if fetch else None,
         }
 
     signals = signal_rows(conn, feed)
@@ -217,6 +222,7 @@ def summarize_feed(conn: sqlite3.Connection, feed: str) -> dict[str, Any]:
         "staleness_status": staleness_status(feed, success["attempted_at"] if success else None),
         "last_fetch_status": fetch["status"] if fetch else "missing",
         "last_rows_affected": fetch["rows_affected"] if fetch else None,
+        "last_cache_used": bool(fetch["cache_used"]) if fetch else None,
     }
 
 
@@ -239,6 +245,7 @@ def print_table(items: list[dict[str, Any]]) -> None:
         "duplicate_rate",
         "staleness_status",
         "last_fetch_status",
+        "last_cache_used",
     )
     print("\t".join(columns))
     for item in items:

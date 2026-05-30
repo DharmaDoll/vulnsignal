@@ -9,7 +9,7 @@ Key decisions:
 - CVE Program is the canonical CVE reference backbone.
 - NVD is optional enrichment, not a blocker for MVP ingestion.
 - GHSA is a core feed.
-- Trivy supports advisory JSON and direct DB ingestion.
+- Trivy's primary path is advisory JSON/vuln-list; the compiled DB is optional backfill only.
 - VEX `not_affected` excludes items from rankings.
 - Assets start as CSV import, including coarse technology observations like OS / framework / middleware.
 - Feed quality should be judged with simple per-feed metrics and a combined operational assessment.
@@ -24,7 +24,7 @@ Key decisions:
 |Done|EPSS bulk CSV ingestion|EPSS fetcher reads FIRST bulk CSV and upserts `epss_current`|
 |Done|GHSA sample ingestion|Small GHSA fetch writes `enrichment` and `package_advisory` signals|
 |Done|Trivy JSON importer|Sample advisory JSON produces `package_advisory` signals through `sync/trivy_adapter.py`|
-|Done|Trivy DB importer|Compiled Trivy DB produces `enrichment` signals through `sync/trivy_adapter.py`|
+|Done|Trivy DB importer (optional)|Compiled Trivy DB can produce `enrichment` signals through `sync/trivy_adapter.py` when explicitly requested, but it is not part of the default refresh workflow|
 |Done|Feed quality summary|A local command reports simple feed metrics from `core.db`|
 |Done|go-exploitdb adapter|All go-exploitdb access goes through `sync/exploit_adapter.py` with schema validation|
 |Done|go-exploitdb sample ingestion|Sample import writes `exploit` signals and records source URL/type when available|
@@ -73,12 +73,12 @@ Current implementation:
 
 Day 1 interpretation:
 
-- `vuln-list` is optional unless package-range fidelity becomes the bottleneck.
+- `vuln-list` is the primary Trivy path; the compiled DB is optional unless scanner-aligned metadata becomes the bottleneck.
 - If the main job is to match against existing assets, Trivy JSON and other scanner-aligned feeds can be enough to start.
-- Keep `vuln-list` as a quality-improvement path rather than a blocker for the first usable asset-to-vulnerability workflow.
+- Keep `vuln-list` as the default Trivy advisory path; use the compiled DB only as a quality-improvement backfill when needed.
 - Current judgment on OSV coverage: the `aquasecurity/vuln-list` `osv` target is sufficient for now, so a separate `OSV.dev` ingest is not a priority until coverage or freshness becomes a measurable gap.
 
-All direct DB access stays inside `sync/trivy_adapter.py` and the dedicated Trivy DB dump helper under `cmd/trivydbdump/`.
+All direct Trivy DB access stays inside `sync/trivy_adapter.py` and the dedicated Trivy DB dump helper under `cmd/trivydbdump/`. It is not part of the default refresh workflow.
 
 ## Open Questions
 

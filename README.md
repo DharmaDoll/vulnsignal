@@ -1,15 +1,15 @@
 # vulnsignal
 Lean AI-Native Vulnerability Intelligence Platform
 
-Current feed priority: CVE Program, KEV, EPSS, GHSA, Trivy JSON, Vulnrichment, go-exploitdb. NVD is optional enrichment in the current phase.
+Current feed priority: CVE Program, KEV, EPSS, GHSA, Trivy vuln-list, Vulnrichment, go-exploitdb. NVD is optional enrichment in the current phase.
 
 GHSA, CVE Program, Trivy vuln-list, and Vulnrichment are all operated from local git mirrors under `data/`.
 For core.db ingestion, only keep records published in 2015 or later.
-Refresh those mirrors with `./scripts/update_data_mirrors.sh`.
+Refresh those mirrors with `./scripts/update_data_mirrors.sh` before any ingest that depends on them.
 The script uses shallow clones and recreates broken mirrors automatically.
 
 For a reproducible smaller validation run, use `./scripts/ingest_recent_core_db.sh`.
-It refreshes the local mirrors, ingests KEV and EPSS plus the latest three calendar years by default, and finishes with `python3 -m sync.feed_quality`.
+It refreshes the local mirrors, ingests KEV, EPSS, CVE Program, GHSA, Trivy vuln-list, and Vulnrichment for the latest three calendar years by default, and finishes with `python3 -m sync.feed_quality`.
 
 Current implementation plan: `docs/ROADMAP.md`
 
@@ -21,9 +21,9 @@ python3 db/migrate.py
 ./scripts/ingest_recent_core_db.sh
 ```
 
-If you only want the live KEV feed, run `python3 -m sync.fetch_kev` directly. If you only want the live EPSS snapshot, run `python3 -m sync.fetch_epss` directly. For a bounded validation corpus, prefer the wrapper script. It keeps the mirror refresh, KEV and EPSS fetches, recent ingest window, and quality check in one pass.
+If you only want the live KEV feed, run `python3 -m sync.fetch_kev` directly. If you only want the live EPSS snapshot, run `python3 -m sync.fetch_epss` directly. For a bounded validation corpus, prefer the wrapper script. It keeps the mirror refresh, KEV, EPSS, and recent advisory ingest window in one pass.
 
-`./scripts/ingest_recent_core_db.sh` now takes a lock so two refreshes do not run at the same time. If network refresh is unavailable, set `SKIP_MIRROR_REFRESH=1` and the script will continue with the current local mirrors.
+`./scripts/ingest_recent_core_db.sh` now takes a lock so two refreshes do not run at the same time. It expects the local mirrors for CVE Program, GHSA, Trivy vuln-list, and Vulnrichment to be refreshed by `./scripts/update_data_mirrors.sh` first. It also stores the last successful mirror refs in `db/refresh_recent_core_db.refs`, so subsequent runs diff against the last ingested commit instead of `HEAD@{1}`. If network refresh is unavailable, set `SKIP_MIRROR_REFRESH=1` and the script will continue with the current local mirrors.
 
 Git pre-commit secret scanning:
 
@@ -100,16 +100,15 @@ project/
 ```
 
 
-Trivy は advisory JSON と compiled DB の両方を扱えます。
-JSON は package advisory の入力として使い、compiled DB は vulnerability metadata の enrichment に使います。
+Trivy の主経路は advisory JSON と `aquasecurity/vuln-list` です。compiled DB は任意のバックフィル用途としてのみ残しています。
 取得手順とローカル cache の要件は [docs/FEEDS.md](/home/calvet/git/vulnsignal/docs/FEEDS.md) を参照してください。
 `core.db` が他の ingest でロックされている場合は、`VULNSIGNAL_DB_PATH=/tmp/vulnsignal-core.db` のように別 DB を指定して再現用 ingest を回せます。
 
-直読みの実行例:
+Trivy DB を手動で読む場合の実行例:
 
 ```bash
 python3 -m sync.fetch_trivy_db --db-dir db/trivy_cache.db
 ```
 
 `db/trivy_cache.db` には `trivy.db` と `metadata.json` が必要です。
-`sync/fetch_trivy_db.py` が `vulnerability` を正規化して `enrichment` signals に落とします。
+`sync/fetch_trivy_db.py` は `vulnerability` を正規化して `enrichment` signals に落としますが、通常更新フローでは回しません。

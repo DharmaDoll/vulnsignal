@@ -72,12 +72,12 @@ def sync(limit: int | None = None, dry_run: bool = False, cache_only: bool = Fal
                 observed_at=utc_now(),
             ):
                 written += 1
-        log_fetch(conn, FEED, "ok", written)
+        log_fetch(conn, FEED, "ok", written, cache_used=cache_used)
         conn.commit()
         return FetchResult(rows_fetched=len(rows), rows_written=written, cache_used=cache_used)
     except Exception as exc:
         conn.rollback()
-        log_fetch(conn, FEED, "error", written, str(exc))
+        log_fetch(conn, FEED, "error", written, str(exc), cache_used=cache_used)
         conn.commit()
         raise
     finally:

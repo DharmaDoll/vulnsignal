@@ -6,13 +6,15 @@ import csv
 import gzip
 import io
 from datetime import date, timedelta
+from pathlib import Path
 
 from sync.common import (
+    CACHE_DIR,
     FetchResult,
+    FetchError,
     connect,
     fetch_bytes,
     log_fetch,
-    read_bytes_cache,
     utc_now,
     write_bytes_cache,
 )
@@ -26,16 +28,55 @@ def default_date() -> str:
     return (date.today() - timedelta(days=1)).isoformat()
 
 
-def load_payload(score_date: str, cache_only: bool) -> tuple[str, bool]:
-    cache_name = f"{FEED}-{score_date}"
+def cache_path(score_date: str) -> Path:
+    return CACHE_DIR / f"{FEED}-{score_date}.csv.gz"
+
+
+def latest_cached_date() -> str | None:
+    prefix = f"{FEED}-"
+    suffix = ".csv.gz"
+    candidates: list[str] = []
+    for path in CACHE_DIR.glob(f"{FEED}-*.csv.gz"):
+        name = path.name
+        if not name.startswith(prefix) or not name.endswith(suffix):
+            continue
+        cached_date = name[len(prefix) : -len(suffix)]
+        try:
+            date.fromisoformat(cached_date)
+        except ValueError:
+            continue
+        candidates.append(cached_date)
+    return max(candidates) if candidates else None
+
+
+def read_cached_payload(score_date: str) -> str:
+    path = cache_path(score_date)
+    if not path.exists():
+        raise FetchError(f"cache missing for {FEED}-{score_date}: {path}")
+    return gzip.decompress(path.read_bytes()).decode("utf-8")
+
+
+def load_payload(score_date: str, cache_only: bool) -> tuple[str, bool, str]:
     if cache_only:
-        return gzip.decompress(read_bytes_cache(cache_name, "csv.gz")).decode("utf-8"), True
+        try:
+            return read_cached_payload(score_date), True, score_date
+        except FetchError:
+            cached_date = latest_cached_date()
+            if cached_date is None:
+                raise
+            return read_cached_payload(cached_date), True, cached_date
     try:
         payload = fetch_bytes(URL_TEMPLATE.format(date=score_date), headers={"User-Agent": "vulnsignal/0.1"})
-        write_bytes_cache(cache_name, payload, "csv.gz")
-        return gzip.decompress(payload).decode("utf-8"), False
+        write_bytes_cache(f"{FEED}-{score_date}", payload, "csv.gz")
+        return gzip.decompress(payload).decode("utf-8"), False, score_date
     except Exception:
-        return gzip.decompress(read_bytes_cache(cache_name, "csv.gz")).decode("utf-8"), True
+        try:
+            return read_cached_payload(score_date), True, score_date
+        except FetchError:
+            cached_date = latest_cached_date()
+            if cached_date is None:
+                raise
+            return read_cached_payload(cached_date), True, cached_date
 
 
 def parse_rows(payload: str) -> list[dict[str, str]]:
@@ -73,7 +114,7 @@ def sync(
     score_date: str | None = None,
 ) -> FetchResult:
     score_date = score_date or default_date()
-    payload, cache_used = load_payload(score_date, cache_only)
+    payload, cache_used, payload_date = load_payload(score_date, cache_only)
     rows = parse_rows(payload)
     if limit is not None:
         rows = rows[:limit]
@@ -94,15 +135,15 @@ def sync(
             previous = current.get(vuln_id)
             if previous is not None and previous == (epss, percentile):
                 continue
-            upsert_epss_current(conn, vuln_id, epss, percentile, score_date)
+            upsert_epss_current(conn, vuln_id, epss, percentile, payload_date)
             current[vuln_id] = (epss, percentile)
             written += 1
-        log_fetch(conn, FEED, "ok", written)
+        log_fetch(conn, FEED, "ok", written, cache_used=cache_used)
         conn.commit()
         return FetchResult(rows_fetched=len(rows), rows_written=written, cache_used=cache_used)
     except Exception as exc:
         conn.rollback()
-        log_fetch(conn, FEED, "error", written, str(exc))
+        log_fetch(conn, FEED, "error", written, str(exc), cache_used=cache_used)
         conn.commit()
         raise
     finally:

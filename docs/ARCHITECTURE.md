@@ -23,7 +23,8 @@ External Feeds
  ├ KEV          — known exploited vulnerabilities
  ├ EPSS         — exploit probability scores
  ├ GHSA         — OSS package advisories and GHSA-only IDs
- ├ Trivy DB     — vulnerability metadata enrichment
+ ├ Trivy JSON / vuln-list — package advisories and scanner-aligned metadata
+ ├ Trivy DB     — optional vulnerability metadata backfill
  ├ go-exploitdb — PoC/exploit presence and maturity
  ├ VEX/CSAF     — vendor not-affected assertions
  └ Vulnrichment — supplemental enrichment
@@ -48,7 +49,7 @@ All normalized data lives here. Tables: `vulnerabilities`, `assets`, `findings`,
 ### External DBs (read-only, separate files)
 
 - `db/exploit.db` — go-exploitdb (accessed only via `sync/exploit_adapter.py`)
-- `db/trivy_cache.db` — Trivy DB cache (accessed only via `sync/trivy_adapter.py`)
+- `db/trivy_cache.db` — Trivy DB cache for optional backfill (accessed only via `sync/trivy_adapter.py`)
 
 Use `ATTACH DATABASE` for cross-DB queries only when necessary. ETL summaries into `core.db` are preferred.
 
@@ -60,7 +61,7 @@ Use `ATTACH DATABASE` for cross-DB queries only when necessary. ETL summaries in
 
 **Adapters isolate external schema churn.** Both Trivy DB and go-exploitdb have broken their schemas across versions. All external DB access goes through adapter modules with schema version pinning.
 
-**Trust hierarchy over last-write-wins.** Multiple feeds may report conflicting severity data. Resolution is deterministic and starts with GHSA, Vulnrichment, and Trivy JSON. The CVE Program is the canonical CVE identifier/reference backbone; NVD is optional enrichment in the current phase. See `FEEDS.md`.
+**Trust hierarchy over last-write-wins.** Multiple feeds may report conflicting severity data. Resolution is deterministic and starts with GHSA, Vulnrichment, and Trivy JSON/vuln-list. The CVE Program is the canonical CVE identifier/reference backbone; NVD is optional enrichment in the current phase. See `FEEDS.md`.
 
 **Coarse asset observations are useful.** Exact package versions are ideal, but the platform should still retain weaker observations like `Ubuntu 22` or `Nuxt.js` as append-only evidence. They are not CMDB truth, but they are strong enough to improve prioritization when version-level inventory is incomplete.
 

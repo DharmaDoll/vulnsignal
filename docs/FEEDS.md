@@ -8,7 +8,6 @@
 |KEV         |hourly   |3h           |Alert + use cache|
 |EPSS        |daily    |48h          |Warn + use cache |
 |GHSA        |every 6h |24h          |Warn + use cache |
-|Trivy DB    |every 6h |24h          |Warn + use cache |
 |go-exploitdb|every 6h |48h          |Warn + use cache |
 |VEX/CSAF    |every 12h|48h          |Warn + use cache |
 |Vulnrichment|every 12h|48h          |Warn + use cache |
@@ -18,8 +17,8 @@
 
 - Retry: exponential backoff, base 5s, cap 300s, 3 attempts minimum
 - On all retries exhausted: write `fetch_log` row with `status='error'`, exit cleanly
-- **Never delete existing data on failure** — always fall back to last known good state
-- `data_freshness()` API endpoint must read `fetch_log` to surface staleness per feed
+- **Never delete existing data on failure** — try DNS-over-HTTPS for name resolution first, then fall back to the last known good cache state
+- `data_freshness()` API endpoint must read `fetch_log` to surface staleness per feed; `fetch_log.cache_used` records whether the latest successful run used a cache fallback
 
 ## Trust hierarchy (conflict resolution)
 
@@ -152,7 +151,7 @@ Rules:
 
 - Current phase: support both Trivy advisory JSON and direct Trivy DB ingestion.
 - JSON remains useful for field-coverage checks and fixture-based validation.
-- Direct Trivy DB ingestion currently yields vulnerability metadata enrichment, not package ranges.
+- Direct Trivy DB ingestion currently yields vulnerability metadata enrichment, not package ranges, and is treated as an optional backfill path rather than a default refresh input.
 - Never parse Trivy scan output JSON as the source of advisory truth.
 - Validate Trivy DB schema version on cold start
 - If schema mismatch: raise `TrivyDBSchemaError`, skip sync
@@ -161,7 +160,7 @@ Rules:
 
 ## Trivy DB execution notes
 
-Use the compiled Trivy DB cache when you want vulnerability metadata directly from Trivy's DB.
+Use the compiled Trivy DB cache only when you explicitly want scanner-aligned vulnerability metadata enrichment from Trivy's DB.
 
 Current command:
 
@@ -176,6 +175,7 @@ Operational notes:
 - `metadata.json.Version` is the schema/version gate.
 - The adapter extracts vulnerability metadata from `vulnerability` and writes `enrichment` signals.
 - The output signal type remains `enrichment`.
+- This path is not part of the default refresh script.
 
 For a bounded validation ingest, add `--min-year 2024` to the command above.
 
@@ -254,6 +254,7 @@ Day 1 note:
 
 - Source: `https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json`
 - Full list on each fetch — diff against existing signals to detect new additions
+- If the live fetch fails, the importer falls back to the local cached JSON snapshot.
 - Signal type: `kev`
 
 ## EPSS
@@ -262,6 +263,7 @@ Day 1 note:
 - Use the daily bulk gzip CSV (`https://epss.empiricalsecurity.com/epss_scores-YYYY-mm-dd.csv.gz`) instead of paginated API queries
 - Default ingestion reads all CSV rows and upserts `epss_current`; use `--limit` only for local sampling
 - `--date YYYY-MM-DD` selects the score date; default is yesterday
+- If the requested live CSV is unavailable, the importer falls back to the newest cached EPSS snapshot on disk and uses that snapshot's date in `epss_current`.
 - Signal type: `epss` is reserved for material EPSS events, not daily full snapshots
 
 ### Production operation
@@ -418,11 +420,13 @@ The script:
 
 - runs `db/migrate.py` first
 - refreshes the local git mirrors unless `SKIP_MIRROR_REFRESH=1`
-- fetches KEV from the live CISA feed
-- ingests GHSA, Trivy vuln-list, and Vulnrichment with a rolling `MIN_YEAR` cutoff
-- optionally ingests `db/trivy_cache.db` and `db/exploit.db` when those local sources exist
+- assumes `./scripts/update_data_mirrors.sh` has already been run if you want the latest mirror commits before a diff-based ingest
+- fetches KEV and EPSS from the live feeds, falling back to the local cache when needed
+- ingests CVE Program, GHSA, Trivy vuln-list, and Vulnrichment with a rolling `MIN_YEAR` cutoff
+- optionally ingests `db/exploit.db` when that local source exists
 - finishes with `python3 -m sync.feed_quality`
 - takes a lock so only one refresh run touches `core.db` at a time
+- stores the last successful mirror refs in `db/refresh_recent_core_db.refs` and reuses them on the next run
 
 Override the year window if needed:
 
@@ -435,8 +439,8 @@ The default window is the latest three calendar years, computed from the current
 Current end-to-end flow for a reproducible local corpus:
 
 1. Run `db/migrate.py`.
-2. Refresh the local mirrors with `./scripts/update_data_mirrors.sh`, or set `SKIP_MIRROR_REFRESH=1` to reuse existing mirrors when offline.
-3. Run `./scripts/ingest_recent_core_db.sh` to fetch KEV, ingest `cvelistV5`, GHSA, Trivy vuln-list, and Vulnrichment with `--min-year`, and finish with `python3 -m sync.feed_quality`.
-4. Optionally ingest `db/trivy_cache.db` and `db/exploit.db` when those local sources are present.
+2. Refresh the local mirrors with `./scripts/update_data_mirrors.sh`. If you are offline and intentionally reusing the current mirrors, set `SKIP_MIRROR_REFRESH=1`.
+3. Run `./scripts/ingest_recent_core_db.sh` to fetch KEV and EPSS, ingest `cvelistV5`, GHSA, Trivy vuln-list, and Vulnrichment with `--min-year`, and finish with `python3 -m sync.feed_quality`.
+4. Optionally ingest `db/exploit.db` when that local source is present.
 
-If you only need the newest operational KEV set, run `python3 -m sync.fetch_kev` directly. For the bounded 3-year validation corpus, prefer the wrapper script so the mirror refresh and quality check happen in the same pass.
+If you only need the newest operational KEV set, run `python3 -m sync.fetch_kev` directly. For the bounded 3-year validation corpus, prefer the wrapper script so the mirror refresh and quality check happen in the same pass. The mirror refresh step matters for the advisory feeds because `ingest_recent_core_db.sh` diffs against the last ingested mirror refs.
