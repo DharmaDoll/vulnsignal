@@ -34,6 +34,7 @@ Key decisions:
 |Done|Vulnrichment ingestion|Sample import writes severity/CVSS/summary enrichment without overwriting higher-trust data|
 |Done|Asset CSV importer|CSV import creates or updates `assets` and `asset_observations` with conservative defaults|
 |Done|Minimal scoring/ranking|v1 scoring works from latest signals and ranking excludes VEX `not_affected`|
+|Planned|Hot web intel signal|`hot` signals can be appended from web evidence over CVEs already present in `core.db`|
 |Planned|Minimal Skills API|`find_vuln`, `top_risks`, `has_exploit`, and `data_freshness` work from local DB|
 
 ## Simple Feed Quality Metrics

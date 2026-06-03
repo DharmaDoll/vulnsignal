@@ -9,6 +9,7 @@ from typing import Any
 
 SCORING_VERSION = "v1"
 MIN_YEAR = 2015
+DEFAULT_REPORT_KEY = "alerts"
 CRITICALITY_BONUS = {
     "critical": 10,
     "high": 7,
@@ -17,6 +18,7 @@ CRITICALITY_BONUS = {
 }
 FRESHNESS_THRESHOLDS_HOURS = {
     "kev": 3,
+    "hot": 24,
     "epss": 48,
     "ghsa": 24,
     "trivy": 24,
@@ -69,6 +71,13 @@ def _parse_json(value: str | None) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _normalize_report_key(report_key: str | None) -> str:
+    if report_key is None:
+        return DEFAULT_REPORT_KEY
+    key = report_key.strip()
+    return key or DEFAULT_REPORT_KEY
 
 
 def _latest_signals(conn: sqlite3.Connection, vuln_id: str) -> dict[str, sqlite3.Row]:
@@ -164,7 +173,10 @@ def score_vulnerability(
     )
 
 
-def iter_ranked_findings(conn: sqlite3.Connection) -> list[ScoredFinding]:
+def iter_ranked_findings(
+    conn: sqlite3.Connection,
+    excluded_vuln_ids: set[str] | None = None,
+) -> list[ScoredFinding]:
     rows = conn.execute(
         """
         SELECT
@@ -182,6 +194,8 @@ def iter_ranked_findings(conn: sqlite3.Connection) -> list[ScoredFinding]:
     ).fetchall()
     scored: list[ScoredFinding] = []
     for row in rows:
+        if excluded_vuln_ids and row["vuln_id"] in excluded_vuln_ids:
+            continue
         finding = score_vulnerability(conn, row, row)
         if not finding.vex_suppressed:
             scored.append(finding)
@@ -204,6 +218,93 @@ def recommend_patch_queue(conn: sqlite3.Connection, limit: int | None = 20) -> l
     return [finding.to_dict() for finding in ranked]
 
 
+def _reported_vuln_ids(conn: sqlite3.Connection, report_key: str) -> set[str]:
+    rows = conn.execute(
+        """
+        SELECT DISTINCT vuln_id
+        FROM report_history
+        WHERE report_key = ?
+        """,
+        (_normalize_report_key(report_key),),
+    ).fetchall()
+    return {row["vuln_id"] for row in rows}
+
+
+def top_unreported_risks(
+    conn: sqlite3.Connection,
+    limit: int | None = 100,
+    report_key: str | None = DEFAULT_REPORT_KEY,
+) -> list[dict[str, Any]]:
+    reported_vuln_ids = _reported_vuln_ids(conn, _normalize_report_key(report_key))
+    ranked = iter_ranked_findings(conn, excluded_vuln_ids=reported_vuln_ids)
+    if limit is not None:
+        ranked = ranked[:limit]
+    return [finding.to_dict() for finding in ranked]
+
+
+def top_new_alerts(
+    conn: sqlite3.Connection,
+    limit: int | None = 100,
+    alert_key: str | None = DEFAULT_REPORT_KEY,
+) -> list[dict[str, Any]]:
+    return top_unreported_risks(conn, limit=limit, report_key=alert_key)
+
+
+def record_report_history(
+    conn: sqlite3.Connection,
+    vuln_ids: list[str],
+    report_key: str | None = DEFAULT_REPORT_KEY,
+    report_run_id: str | None = None,
+    payloads_by_vuln_id: dict[str, Any] | None = None,
+) -> int:
+    normalized_report_key = _normalize_report_key(report_key)
+    payloads_by_vuln_id = payloads_by_vuln_id or {}
+    reported_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    rows_written = 0
+    seen_vuln_ids: set[str] = set()
+    for vuln_id in vuln_ids:
+        if vuln_id in seen_vuln_ids:
+            continue
+        seen_vuln_ids.add(vuln_id)
+        payload = payloads_by_vuln_id.get(vuln_id)
+        if payload is None:
+            payload_json = None
+        elif isinstance(payload, str):
+            payload_json = payload
+        else:
+            payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        conn.execute(
+            """
+            INSERT INTO report_history (
+              report_key,
+              vuln_id,
+              report_run_id,
+              payload_json,
+              reported_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (normalized_report_key, vuln_id, report_run_id, payload_json, reported_at),
+        )
+        rows_written += 1
+    return rows_written
+
+
+def record_notification_history(
+    conn: sqlite3.Connection,
+    vuln_ids: list[str],
+    alert_key: str | None = DEFAULT_REPORT_KEY,
+    notification_run_id: str | None = None,
+    payloads_by_vuln_id: dict[str, Any] | None = None,
+) -> int:
+    return record_report_history(
+        conn,
+        vuln_ids=vuln_ids,
+        report_key=alert_key,
+        report_run_id=notification_run_id,
+        payloads_by_vuln_id=payloads_by_vuln_id,
+    )
+
+
 def has_exploit(conn: sqlite3.Connection, vuln_id: str) -> bool:
     latest = _latest_signals(conn, vuln_id)
     return "exploit" in latest
@@ -212,7 +313,7 @@ def has_exploit(conn: sqlite3.Connection, vuln_id: str) -> bool:
 def find_vuln(conn: sqlite3.Connection, vuln_id: str) -> dict[str, Any] | None:
     vuln_row = conn.execute(
         """
-        SELECT vuln_id, source, title, summary, severity, cvss_score, cvss_source, published_at, updated_at
+        SELECT vuln_id, source, title, summary, severity, cvss_score, cvss_source, published_at, first_seen_at, updated_at
         FROM vulnerabilities
         WHERE vuln_id = ?
         """,
@@ -247,6 +348,83 @@ def find_vuln(conn: sqlite3.Connection, vuln_id: str) -> dict[str, Any] | None:
         "has_exploit": "exploit" in latest,
         "vex_suppressed": _vex_suppressed(latest),
     }
+
+
+def top_hot(conn: sqlite3.Connection, limit: int | None = 20) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT
+          s.id,
+          s.vuln_id,
+          s.provider,
+          s.score,
+          s.value_json,
+          s.observed_at,
+          v.source,
+          v.title,
+          v.summary,
+          v.severity,
+          v.cvss_score,
+          v.published_at,
+          v.first_seen_at,
+          v.updated_at
+        FROM signals s
+        JOIN vulnerabilities v ON v.vuln_id = s.vuln_id
+        WHERE s.signal_type = 'hot'
+        ORDER BY COALESCE(s.score, 0) DESC, s.observed_at DESC, s.id DESC
+        """
+    ).fetchall()
+
+    latest_by_vuln: dict[str, sqlite3.Row] = {}
+    for row in rows:
+        vuln_id = row["vuln_id"]
+        if vuln_id not in latest_by_vuln:
+            latest_by_vuln[vuln_id] = row
+    ranked = sorted(
+        latest_by_vuln.values(),
+        key=lambda row: (
+            -int("kev" in _latest_signals(conn, row["vuln_id"])),
+            -int("exploit" in _latest_signals(conn, row["vuln_id"])),
+            -_epss_score(conn, row["vuln_id"]),
+            -(float(row["cvss_score"] or 0.0)),
+            row["published_at"] or "",
+            -(float(row["score"] or 0.0)),
+            row["vuln_id"],
+        ),
+    )
+    if limit is not None:
+        ranked = ranked[:limit]
+
+    items: list[dict[str, Any]] = []
+    for row in ranked:
+        value = _signal_value(row)
+        latest = _latest_signals(conn, row["vuln_id"])
+        items.append(
+            {
+                "vuln_id": row["vuln_id"],
+                "source": row["source"],
+                "title": row["title"],
+                "severity": row["severity"],
+                "cvss_score": row["cvss_score"],
+                "epss_score": _epss_score(conn, row["vuln_id"]),
+                "kev_present": "kev" in latest,
+                "exploit_present": "exploit" in latest,
+                "published_at": row["published_at"],
+                "first_seen_at": row["first_seen_at"],
+                "signal_provider": row["provider"],
+                "signal_score": row["score"],
+                "observed_at": row["observed_at"],
+                "search_budget": value.get("search_budget"),
+                "result_count": value.get("result_count"),
+                "evidence_count": value.get("evidence_count"),
+                "independent_sources": value.get("independent_sources"),
+                "evidence_types": value.get("evidence_types", []),
+                "source_types": value.get("source_types", []),
+                "urls": value.get("urls", []),
+                "headline": value.get("headline"),
+            }
+        )
+    return items
 
 
 def _parse_time(value: str | None) -> datetime | None:

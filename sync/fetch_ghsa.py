@@ -349,6 +349,7 @@ def sync(
                             cvss_score=float(cvss_score) if cvss_score is not None else None,
                             cvss_source=PROVIDER if cvss_score is not None else None,
                             published_at=item.get("published_at"),
+                            first_seen_at=item.get("published_at"),
                             updated_at=item.get("updated_at"),
                         )
                         if append_signal(
@@ -415,6 +416,7 @@ def sync(
                         cvss_score=float(cvss_score) if cvss_score is not None else None,
                         cvss_source=PROVIDER if cvss_score is not None else None,
                         published_at=item.get("published_at"),
+                        first_seen_at=item.get("published_at"),
                         updated_at=item.get("updated_at"),
                     )
                     if append_signal(

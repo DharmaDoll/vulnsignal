@@ -71,6 +71,8 @@ def sync(
                     severity=vulnerability.severity,
                     cvss_score=vulnerability.cvss_score,
                     cvss_source="Trivy DB",
+                    published_at=vulnerability.published_at,
+                    first_seen_at=vulnerability.published_at,
                 )
                 if append_signal(
                     conn,
@@ -113,6 +115,8 @@ def sync(
                     severity=vulnerability.severity,
                     cvss_score=vulnerability.cvss_score,
                     cvss_source="Trivy DB",
+                    published_at=vulnerability.published_at,
+                    first_seen_at=vulnerability.published_at,
                 )
                 if append_signal(
                     conn,

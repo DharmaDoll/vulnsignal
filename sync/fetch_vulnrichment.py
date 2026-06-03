@@ -374,6 +374,7 @@ def sync(
                         cvss_score=merged["cvss_score"],
                         cvss_source=merged["cvss_source"],
                         published_at=merged["published_at"],
+                        first_seen_at=merged["published_at"],
                         updated_at=merged["updated_at"],
                     )
                     if append_signal(
@@ -419,6 +420,7 @@ def sync(
                     cvss_score=merged["cvss_score"],
                     cvss_source=merged["cvss_source"],
                     published_at=merged["published_at"],
+                    first_seen_at=merged["published_at"],
                     updated_at=merged["updated_at"],
                 )
                 if append_signal(

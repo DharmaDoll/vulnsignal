@@ -63,6 +63,8 @@ def sync(path: Path, limit: int | None = None, dry_run: bool = False, min_year: 
                 title=advisory.title,
                 summary=advisory.summary,
                 severity=advisory.severity,
+                published_at=advisory.published_at,
+                first_seen_at=advisory.published_at,
             )
             if append_signal(
                 conn,

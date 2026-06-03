@@ -24,7 +24,16 @@ def current_version(conn: sqlite3.Connection) -> int:
 
 def apply_sql_file(conn: sqlite3.Connection, path: Path) -> None:
     sql = path.read_text(encoding="utf-8")
-    conn.executescript(sql)
+    for statement in sql.split(";"):
+        stmt = statement.strip()
+        if not stmt:
+            continue
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name: first_seen_at" in str(exc) and "ADD COLUMN first_seen_at" in stmt:
+                continue
+            raise
 
 
 def migrate(db_path: Path = DB_PATH) -> int:

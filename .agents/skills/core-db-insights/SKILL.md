@@ -33,6 +33,18 @@ Produce a report that answers:
 5. Separate distinct `vuln_id` counts from raw signal counts.
 6. If `assets` and `findings` exist, include scoring-oriented observations; otherwise say they are absent.
 
+## Report filter policy
+
+- For report output, exclude boundary/network appliance vulnerabilities by
+  default unless the user explicitly asks to include them.
+- Treat vendors such as `Cisco`, `Palo Alto`, `Fortinet`, `Juniper`, `F5`,
+  and similar perimeter appliance families as out of scope for the default
+  report view.
+- Keep the underlying records and scores intact; this is a presentation filter,
+  not a data deletion or scoring change.
+- If the user asks for boundary-device analysis explicitly, include them in a
+  separate, clearly labeled section.
+
 ## Mandatory insight sections
 
 Include these sections in the report:
@@ -54,6 +66,7 @@ Include these sections in the report:
 - Highlight when `package_advisory` is present without `enrichment`, or vice versa.
 - Highlight when `exploit` or `kev` is rare but concentrated on a small set of vuln_ids.
 - If `findings` exists, mention how many findings would be suppressible by VEX `not_affected`.
+- Apply the report filter policy above before presenting default results.
 
 ## Derived metrics to compute
 
@@ -76,6 +89,7 @@ Write a concise report with short bullets and concrete numbers. Prefer:
 - ratios
 - a few representative vuln_ids
 - one-line interpretation after each metric block
+- include both `published_at` and `first_seen_at` for representative and ranked vulnerability examples
 
 Do not write generic prose without supporting numbers.
 

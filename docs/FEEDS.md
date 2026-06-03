@@ -6,6 +6,7 @@
 |------------|---------|-------------|-----------------|
 |CVE Program  |every 6h |24h          |Warn + use cache |
 |KEV         |hourly   |3h           |Alert + use cache|
+|Hot web intel|ad hoc   |24h          |Warn + use cache |
 |EPSS        |daily    |48h          |Warn + use cache |
 |GHSA        |every 6h |24h          |Warn + use cache |
 |go-exploitdb|every 6h |48h          |Warn + use cache |
@@ -401,6 +402,69 @@ Notes:
 - Keep the local mirror on disk and update it by git pull or archive replacement, not by per-file manual downloads.
 
 For a bounded validation ingest, add `--min-year 2024`.
+
+## Hot web intel
+
+- Source: web search over CVEs already present in `core.db`
+- Signal type: `hot`
+- Purpose: detect current external attention, active exploitation, or public exploitability that is not yet fully captured by KEV / exploit / vendor feeds
+- Positioning: reference-only signal; do not let `hot` outrank KEV, exploit, EPSS, or CVSS in the main priority view
+
+### Operating model
+
+- Start from a bounded report window, typically the same cutoff used for the current report.
+- Use the number of CVEs emitted by that report as the default search budget.
+- Keep the search budget bounded by a configurable cap so a large corpus does not fan out into an unbounded crawl.
+- Search only the CVEs already present in `core.db`.
+- Prefer high-signal sources:
+  - official vendor advisories and security blogs
+  - CISA / government advisories
+  - reputable security news outlets
+  - researcher blogs and write-ups
+  - X posts only when they contain a direct CVE reference, PoC, exploit, or clear corroboration
+- Do not treat a single social post as strong evidence on its own.
+- Use the search result count and evidence count as first-class signal fields.
+
+### Recommended `value_json`
+
+```json
+{
+  "window_cutoff": "2026-05-25T00:00:00+00:00",
+  "search_budget": 20,
+  "search_queries": 3,
+  "result_count": 8,
+  "evidence_count": 3,
+  "independent_sources": 2,
+  "evidence_types": ["kev", "active_exploitation", "public_poc"],
+  "source_types": ["vendor", "cisa", "news"],
+  "urls": ["https://...", "https://..."],
+  "headline": "short human-readable summary"
+}
+```
+
+### Interpretation rules
+
+- `evidence_count` and `independent_sources` matter more than raw mention volume.
+- `KEV` or vendor-confirmed active exploitation should produce a strong `hot` signal.
+- Public PoC / exploit reporting should produce a medium-strength `hot` signal.
+- Broad chatter without direct evidence should stay weak or be dropped.
+- Append one `hot` signal per vulnerability per run. Treat each run as a new observation in history.
+
+### Production operation
+
+The fetcher should:
+
+1. Read the current report window from `core.db`.
+2. Pick the CVEs to search, using the report output count as the default budget.
+3. Run targeted web searches for each CVE.
+4. Convert the resulting evidence into a single append-only `hot` signal row per CVE.
+5. Write `fetch_log` with the normal success / error contract.
+
+Local command:
+
+```bash
+python3 -m sync.fetch_hot --cutoff 2026-05-25T00:00:00+00:00 --search-cap 20
+```
 
 ## Local feed quality
 

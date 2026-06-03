@@ -54,6 +54,8 @@ def sync(limit: int | None = None, dry_run: bool = False, cache_only: bool = Fal
                 source="kev",
                 title=item.get("vulnerabilityName"),
                 summary=item.get("shortDescription"),
+                published_at=item.get("dateAdded"),
+                first_seen_at=item.get("dateAdded"),
             )
             if append_signal(
                 conn,

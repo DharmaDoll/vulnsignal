@@ -335,14 +335,15 @@ def upsert_vulnerability(
     cvss_score: float | None = None,
     cvss_source: str | None = None,
     published_at: str | None = None,
+    first_seen_at: str | None = None,
     updated_at: str | None = None,
 ) -> None:
     conn.execute(
         """
         INSERT INTO vulnerabilities (
-          vuln_id, source, title, summary, severity, cvss_score, cvss_source, published_at, updated_at
+          vuln_id, source, title, summary, severity, cvss_score, cvss_source, published_at, first_seen_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(vuln_id) DO UPDATE SET
           title = COALESCE(excluded.title, vulnerabilities.title),
           summary = COALESCE(excluded.summary, vulnerabilities.summary),
@@ -350,6 +351,12 @@ def upsert_vulnerability(
           cvss_score = COALESCE(excluded.cvss_score, vulnerabilities.cvss_score),
           cvss_source = COALESCE(excluded.cvss_source, vulnerabilities.cvss_source),
           published_at = COALESCE(excluded.published_at, vulnerabilities.published_at),
+          first_seen_at = CASE
+            WHEN vulnerabilities.first_seen_at IS NULL THEN excluded.first_seen_at
+            WHEN excluded.first_seen_at IS NULL THEN vulnerabilities.first_seen_at
+            WHEN excluded.first_seen_at < vulnerabilities.first_seen_at THEN excluded.first_seen_at
+            ELSE vulnerabilities.first_seen_at
+          END,
           updated_at = COALESCE(excluded.updated_at, vulnerabilities.updated_at)
         """,
         (
@@ -361,8 +368,9 @@ def upsert_vulnerability(
             cvss_score,
             cvss_source,
             published_at,
-        updated_at,
-    ),
+            first_seen_at,
+            updated_at,
+        ),
     )
 
 

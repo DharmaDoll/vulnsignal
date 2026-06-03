@@ -16,6 +16,63 @@ def _write_json(path: Path, payload: object) -> None:
 
 
 class FetchTrivyVulnListTests(TestCase):
+    def test_sync_includes_seal_target_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            core_db = tmp_path / "core.db"
+            source_dir = tmp_path / "vuln-list"
+            advisory_dir = source_dir / "seal" / "seal-gnutls28"
+            advisory_dir.mkdir(parents=True)
+            _write_json(
+                advisory_dir / "CVE-2026-42014.json",
+                {
+                    "id": "CVE-2026-42014",
+                    "published": "2026-04-30T00:00:00Z",
+                    "affected": [
+                        {
+                            "package": {"ecosystem": "Seal:Debian", "name": "seal-gnutls28"},
+                            "ranges": [
+                                {
+                                    "type": "ECOSYSTEM",
+                                    "events": [
+                                        {"introduced": "3.8.3-1.1ubuntu3.2+sp1"},
+                                        {"fixed": "3.8.3-1.1ubuntu3.2+sp999"},
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                },
+            )
+            migrate(core_db)
+
+            def connect_to_core_db() -> sqlite3.Connection:
+                conn = sqlite3.connect(core_db)
+                conn.row_factory = sqlite3.Row
+                return conn
+
+            with patch("sync.fetch_trivy_vuln_list.connect", side_effect=connect_to_core_db):
+                result = fetch_trivy_vuln_list.sync(source_dir=source_dir, dry_run=False)
+
+            self.assertEqual(1, result.rows_fetched)
+            self.assertEqual(1, result.rows_written)
+            self.assertFalse(result.cache_used)
+
+            conn = connect_to_core_db()
+            conn.row_factory = sqlite3.Row
+            try:
+                row = conn.execute(
+                    "SELECT source, published_at, first_seen_at FROM vulnerabilities WHERE vuln_id = ?",
+                    ("CVE-2026-42014",),
+                ).fetchone()
+            finally:
+                conn.close()
+
+            self.assertIsNotNone(row)
+            self.assertEqual("trivy", row["source"])
+            self.assertEqual("2026-04-30T00:00:00Z", row["published_at"])
+            self.assertEqual("2026-04-30T00:00:00Z", row["first_seen_at"])
+
     def test_sync_skips_advisories_before_2015(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

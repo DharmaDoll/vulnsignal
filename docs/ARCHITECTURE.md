@@ -44,7 +44,11 @@ Skills API               (app/api.py)
 
 ### core.db (primary)
 
-All normalized data lives here. Tables: `vulnerabilities`, `assets`, `findings`, `decisions`, `signals`, `fetch_log`.
+All normalized data lives here. Tables: `vulnerabilities`, `assets`, `findings`, `decisions`, `signals`, `report_history`, `fetch_log`.
+
+`report_history` is used to dedupe alert delivery runs. The core report/ranking
+outputs remain complete; only notification channels like Slack should consult
+the history table to skip previously sent vulnerabilities.
 
 ### External DBs (read-only, separate files)
 

@@ -338,6 +338,7 @@ def sync(
                         cvss_score=item.get("cvss_score"),
                         cvss_source=item.get("cvss_source"),
                         published_at=item.get("published_at"),
+                        first_seen_at=item.get("published_at"),
                         updated_at=item.get("updated_at"),
                     )
                     cache.write(item)
@@ -375,6 +376,7 @@ def sync(
                     cvss_score=item.get("cvss_score"),
                     cvss_source=item.get("cvss_source"),
                     published_at=item.get("published_at"),
+                    first_seen_at=item.get("published_at"),
                     updated_at=item.get("updated_at"),
                 )
                 if append_signal(

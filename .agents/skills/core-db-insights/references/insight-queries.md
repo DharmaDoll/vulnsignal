@@ -8,9 +8,9 @@ Run `db/migrate.py` first. Bind `:cutoff` to an explicit ISO date.
 SELECT
   count(*) AS total,
   count(DISTINCT source) AS source_count,
-  count(DISTINCT substr(published_at, 1, 4)) AS year_count
+  count(DISTINCT substr(first_seen_at, 1, 4)) AS year_count
 FROM vulnerabilities
-WHERE published_at >= :cutoff;
+WHERE first_seen_at >= :cutoff;
 ```
 
 ## 2. Source share
@@ -19,7 +19,7 @@ WHERE published_at >= :cutoff;
 SELECT source, count(*) AS n,
        round(100.0 * count(*) / sum(count(*)) OVER (), 2) AS pct
 FROM vulnerabilities
-WHERE published_at >= :cutoff
+WHERE first_seen_at >= :cutoff
 GROUP BY source
 ORDER BY n DESC, source;
 ```
@@ -34,7 +34,7 @@ SELECT
   END AS severity,
   count(*) AS n
 FROM vulnerabilities
-WHERE published_at >= :cutoff
+WHERE first_seen_at >= :cutoff
 GROUP BY severity
 ORDER BY n DESC, severity;
 ```
@@ -47,7 +47,7 @@ SELECT source,
        sum(CASE WHEN cvss_score IS NOT NULL THEN 1 ELSE 0 END) AS with_cvss,
        round(100.0 * sum(CASE WHEN cvss_score IS NOT NULL THEN 1 ELSE 0 END) / count(*), 2) AS pct
 FROM vulnerabilities
-WHERE published_at >= :cutoff
+WHERE first_seen_at >= :cutoff
 GROUP BY source
 ORDER BY total DESC, source;
 ```
@@ -58,7 +58,7 @@ ORDER BY total DESC, source;
 WITH recent AS (
   SELECT DISTINCT vuln_id
   FROM vulnerabilities
-  WHERE published_at >= :cutoff
+  WHERE first_seen_at >= :cutoff
 ),
 flags AS (
   SELECT r.vuln_id,
@@ -85,13 +85,15 @@ SELECT v.vuln_id,
        v.title,
        v.severity,
        v.cvss_score,
+       v.published_at,
+       v.first_seen_at,
        max(CASE WHEN s.signal_type = 'epss' THEN 1 ELSE 0 END) AS has_epss,
        max(CASE WHEN s.signal_type = 'exploit' THEN 1 ELSE 0 END) AS has_exploit,
        max(CASE WHEN s.signal_type = 'kev' THEN 1 ELSE 0 END) AS has_kev,
        max(CASE WHEN s.signal_type = 'package_advisory' THEN 1 ELSE 0 END) AS has_package
 FROM vulnerabilities v
 LEFT JOIN signals s ON s.vuln_id = v.vuln_id
-WHERE v.published_at >= :cutoff
+WHERE v.first_seen_at >= :cutoff
 GROUP BY v.vuln_id
 ORDER BY has_kev DESC, has_exploit DESC, has_package DESC, has_epss DESC, v.cvss_score DESC
 LIMIT 20;
@@ -100,13 +102,13 @@ LIMIT 20;
 ## 7. Weakly supported records
 
 ```sql
-SELECT v.vuln_id, v.source, v.title, v.severity, v.cvss_score
+SELECT v.vuln_id, v.source, v.title, v.severity, v.cvss_score, v.published_at, v.first_seen_at
 FROM vulnerabilities v
 LEFT JOIN signals s ON s.vuln_id = v.vuln_id
-WHERE v.published_at >= :cutoff
+WHERE v.first_seen_at >= :cutoff
 GROUP BY v.vuln_id
 HAVING sum(CASE WHEN s.signal_type IN ('enrichment', 'package_advisory', 'exploit', 'kev', 'epss') THEN 1 ELSE 0 END) <= 1
-ORDER BY v.published_at DESC
+ORDER BY v.first_seen_at DESC
 LIMIT 20;
 ```
 
@@ -131,3 +133,4 @@ WHERE risk_score >= 80 AND COALESCE(status, 'open') = 'open';
 - Mention whether the corpus is dominated by a single source.
 - Mention whether the corpus is mostly enriched context or has strong escalation signals.
 - Mention absent `assets` / `findings` as a limitation if needed.
+- For recency-based reporting, use `first_seen_at` for the time window.

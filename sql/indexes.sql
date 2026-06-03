@@ -13,3 +13,5 @@ DROP INDEX IF EXISTS idx_fetch_log_feed;
 CREATE INDEX IF NOT EXISTS idx_fetch_log_feed       ON fetch_log(feed, attempted_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_epss_current_epss    ON epss_current(epss DESC);
 CREATE INDEX IF NOT EXISTS idx_epss_current_percentile ON epss_current(percentile DESC);
+CREATE INDEX IF NOT EXISTS idx_report_history_key_vuln ON report_history(report_key, vuln_id);
+CREATE INDEX IF NOT EXISTS idx_report_history_reported_at ON report_history(reported_at DESC);

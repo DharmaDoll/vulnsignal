@@ -23,7 +23,7 @@ free-form one-off summary.
 
 1. Run `db/migrate.py`.
 2. Open `db/core.db` with read-only SQL.
-3. Use a bounded window for "recent" analysis. Prefer `published_at >= date('now', '-3 years')` or the equivalent explicit ISO cutoff.
+3. Use a bounded window for "recent" analysis. Prefer `first_seen_at >= date('now', '-3 years')` or the equivalent explicit ISO cutoff.
 4. Summarize the same core views every time:
    - total vulnerable records in scope
    - year-by-year trend
@@ -37,6 +37,18 @@ free-form one-off summary.
    - caveats and gaps
 5. Keep conclusions tied to the query results. Do not infer asset impact unless
    `assets` and `findings` exist in the DB.
+
+## Report filter policy
+
+- For report output, exclude boundary/network appliance vulnerabilities by
+  default unless the user explicitly asks to include them.
+- Treat vendors such as `Cisco`, `Palo Alto`, `Fortinet`, `Juniper`, `F5`,
+  and similar perimeter appliance families as out of scope for the default
+  report view.
+- Keep the underlying records and scores intact; this is a presentation filter,
+  not a data deletion or scoring change.
+- If the user asks for boundary-device analysis explicitly, include them in a
+  separate, clearly labeled section.
 
 ## Output shape
 
@@ -94,8 +106,8 @@ EPSS requirement:
 - Every report must include EPSS values for notable vulnerabilities.
 - If a vulnerability has an `epss_current` row, show the numeric EPSS value.
 - If a vulnerability has no EPSS row, state `EPSS: missing` explicitly.
-- Every ranked vulnerability list and representative example must include `published_at`.
-- Use an explicit date/time format when showing `published_at`; do not omit it.
+- Every ranked vulnerability list and representative example must include `published_at` and `first_seen_at`.
+- Use an explicit date/time format when showing `published_at` and `first_seen_at`; do not omit them.
 
 ## Guardrails
 
@@ -104,6 +116,7 @@ EPSS requirement:
 - Do not mix raw feed counts with distinct vuln_id counts without labeling the difference.
 - If the user asks for "last 3 years", use an explicit ISO cutoff derived from the current date.
 - Include EPSS in ranked vulnerability lists and representative examples.
+- Apply the report filter policy above before presenting default results.
 
 ## Reference queries
 

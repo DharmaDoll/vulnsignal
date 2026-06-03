@@ -183,6 +183,13 @@ class ScoringTests(TestCase):
                     INSERT INTO fetch_log (feed, attempted_at, status, error_msg, rows_affected)
                     VALUES (?, ?, ?, ?, ?)
                     """,
+                    ("hot", fresh_at, "ok", None, 1),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO fetch_log (feed, attempted_at, status, error_msg, rows_affected)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
                     ("kev", fresh_at, "error", "boom", 0),
                 )
                 conn.commit()
@@ -197,4 +204,5 @@ class ScoringTests(TestCase):
             self.assertIn("exploit", found["signals"])
             self.assertEqual("go-exploitdb", found["signals"]["exploit"]["provider"])
             self.assertEqual("fresh", freshness["ghsa"]["staleness_status"])
+            self.assertEqual("fresh", freshness["hot"]["staleness_status"])
             self.assertEqual("error", freshness["kev"]["last_fetch_status"])

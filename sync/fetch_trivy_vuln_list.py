@@ -11,7 +11,7 @@ from sync.trivy_adapter import iter_advisories_from_directory
 
 FEED = "trivy_vuln_list"
 PROVIDER = "Trivy vuln-list"
-DEFAULT_TARGETS = ("alpine", "debian", "ubuntu", "ghsa", "glad", "go", "osv")
+DEFAULT_TARGETS = ("alpine", "debian", "ubuntu", "ghsa", "glad", "go", "osv", "seal")
 DEFAULT_SOURCE_DIR = ROOT / "data" / "aquasecurity-vuln-list-mirror"
 MIN_YEAR = 2015
 
@@ -83,6 +83,8 @@ def sync(
                         title=advisory.title,
                         summary=advisory.summary,
                         severity=advisory.severity,
+                        published_at=advisory.published_at,
+                        first_seen_at=advisory.published_at,
                     )
                     if append_signal(
                         conn,
@@ -130,6 +132,8 @@ def sync(
                     title=advisory.title,
                     summary=advisory.summary,
                     severity=advisory.severity,
+                    published_at=advisory.published_at,
+                    first_seen_at=advisory.published_at,
                 )
                 if append_signal(
                     conn,

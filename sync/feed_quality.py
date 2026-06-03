@@ -13,6 +13,7 @@ from sync.common import connect
 FEED_PROVIDERS = {
     "cve_program": ("CVE Program",),
     "kev": ("CISA KEV",),
+    "hot": ("Web Hot Intel",),
     "epss": ("FIRST EPSS",),
     "ghsa": ("GitHub Advisory Database",),
     "trivy": ("Trivy JSON", "trivy-db"),
@@ -27,6 +28,7 @@ FEED_PROVIDERS = {
 REQUIRED_FIELDS = {
     "cve_program": ("title",),
     "kev": ("date_added",),
+    "hot": ("search_budget", "result_count", "evidence_count", "independent_sources", "urls"),
     "epss": ("epss", "percentile"),
     "ghsa": ("severity",),
     "trivy": ("ecosystem", "package_name", "fixed_version"),
@@ -41,6 +43,7 @@ REQUIRED_FIELDS = {
 MAX_STALENESS_HOURS = {
     "cve_program": 24,
     "kev": 3,
+    "hot": 24,
     "epss": 48,
     "ghsa": 24,
     "trivy": 24,

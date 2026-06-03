@@ -54,6 +54,7 @@ class VulnerabilityRecord:
     vendor_severity: dict[str, Any] | None
     references: list[str]
     observed_at: str
+    published_at: str | None = None
 
 
 def first_value(item: dict[str, Any], keys: Iterable[str]) -> Any:
@@ -235,6 +236,19 @@ def normalize_cvss(value: Any) -> tuple[float | None, str | None]:
     return None, None
 
 
+def published_at_from_payload(payload: dict[str, Any], *extra_sources: dict[str, Any] | None) -> str | None:
+    for source in (payload, *extra_sources):
+        if not isinstance(source, dict):
+            continue
+        published_at = first_value(
+            source,
+            ("PublishedDate", "PublishedAt", "published_at", "published", "datePublished"),
+        )
+        if published_at:
+            return str(published_at)
+    return None
+
+
 def vulnerability_from_payload(
     vuln_id: str,
     payload: dict[str, Any],
@@ -247,6 +261,7 @@ def vulnerability_from_payload(
     cvss_score, cvss_vector = normalize_cvss(first_value(payload, ("CVSS", "cvss")))
     vendor_severity = payload.get("VendorSeverity") if isinstance(payload.get("VendorSeverity"), dict) else None
     references = normalize_list(first_value(payload, ("References", "references")))
+    published_at = published_at_from_payload(payload)
     return VulnerabilityRecord(
         vuln_id=vuln_id,
         source=source_hint or "trivy-db",
@@ -258,6 +273,7 @@ def vulnerability_from_payload(
         vendor_severity=vendor_severity,
         references=references,
         observed_at=observed_at,
+        published_at=str(published_at) if published_at else None,
     )
 
 
@@ -309,7 +325,7 @@ def advisory_from_payload(
     published_at = first_value(payload, ("PublishedAt", "published", "published_at", "datePublished"))
     advisory_container = payload.get("Advisory")
     if isinstance(advisory_container, dict):
-        published_at = published_at or first_value(advisory_container, ("PublishedAt", "published", "published_at"))
+        published_at = published_at or published_at_from_payload(advisory_container)
 
     return AdvisoryRecord(
         vuln_id=vuln_id,

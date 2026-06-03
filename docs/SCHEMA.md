@@ -32,6 +32,7 @@ CREATE TABLE vulnerabilities (
   cvss_score   REAL,
   cvss_source  TEXT,               -- which feed provided this score
   published_at TEXT,
+  first_seen_at TEXT,              -- first announcement/publication date seen in core.db
   updated_at   TEXT
 );
 ```
@@ -144,6 +145,7 @@ Signal type taxonomy:
 - `package_advisory` — package-level affected range (from Trivy JSON/vuln-list)
 - `vex` — vendor not-affected / affected assertion
 - `enrichment` — supplemental metadata (Vulnrichment, Trivy DB vulnerability metadata)
+- `hot` — current external attention / exploitation signal derived from web research
 - `ssvc_factor` — future SSVC inputs
 
 Initial feed quality metrics should stay simple:
@@ -167,7 +169,24 @@ CREATE TABLE fetch_log (
   attempted_at  TEXT NOT NULL,
   status        TEXT NOT NULL,  -- 'ok' | 'error' | 'skipped'
   error_msg     TEXT,
-  rows_affected INTEGER
+  rows_affected INTEGER,
+  cache_used    INTEGER NOT NULL DEFAULT 0
+);
+```
+
+### report_history
+
+Append-only log of emitted notifications. This is for deduping alert delivery
+such as Slack; it does not filter the underlying report output.
+
+```sql
+CREATE TABLE report_history (
+  id            INTEGER PRIMARY KEY,
+  report_key    TEXT NOT NULL,
+  vuln_id       TEXT NOT NULL REFERENCES vulnerabilities(vuln_id),
+  report_run_id TEXT,
+  payload_json  TEXT,
+  reported_at   TEXT NOT NULL
 );
 ```
 
@@ -184,5 +203,7 @@ CREATE INDEX idx_findings_asset_id    ON findings(asset_id);
 CREATE INDEX idx_findings_risk_score  ON findings(risk_score DESC);
 CREATE INDEX idx_asset_observations_asset_kind ON asset_observations(asset_id, kind, observed_at DESC);
 CREATE INDEX idx_asset_observations_observed_at ON asset_observations(observed_at);
-CREATE INDEX idx_fetch_log_feed       ON fetch_log(feed, attempted_at DESC);
+CREATE INDEX idx_fetch_log_feed       ON fetch_log(feed, attempted_at DESC, id DESC);
+CREATE INDEX idx_report_history_key_vuln ON report_history(report_key, vuln_id);
+CREATE INDEX idx_report_history_reported_at ON report_history(reported_at DESC);
 ```

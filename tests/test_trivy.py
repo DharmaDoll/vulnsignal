@@ -46,6 +46,7 @@ class TrivyAdapterTests(TestCase):
                         "CVSS": {"aqua": {"V3Score": 7.5, "V3Vector": "CVSS:3.1/AV:N"}},
                         "VendorSeverity": {"aqua": 4},
                         "References": ["https://example.invalid/advisory"],
+                        "PublishedDate": "2024-02-01T00:00:00Z",
                     },
                 },
             )
@@ -68,6 +69,7 @@ class TrivyAdapterTests(TestCase):
             self.assertEqual("CVSS:3.1/AV:N", vulnerability.cvss_vector)
             self.assertEqual({"aqua": 4}, vulnerability.vendor_severity)
             self.assertEqual(["https://example.invalid/advisory"], vulnerability.references)
+            self.assertEqual("2024-02-01T00:00:00Z", vulnerability.published_at)
 
 
 class FetchTrivyDbTests(TestCase):
