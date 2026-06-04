@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from sync.hot_intel import attention_score_from_value
+
 
 SCORING_VERSION = "v1"
 MIN_YEAR = 2015
@@ -383,12 +385,12 @@ def top_hot(conn: sqlite3.Connection, limit: int | None = 20) -> list[dict[str, 
     ranked = sorted(
         latest_by_vuln.values(),
         key=lambda row: (
+            -(attention_score_from_value(_signal_value(row)) or float(row["score"] or 0.0)),
             -int("kev" in _latest_signals(conn, row["vuln_id"])),
             -int("exploit" in _latest_signals(conn, row["vuln_id"])),
             -_epss_score(conn, row["vuln_id"]),
             -(float(row["cvss_score"] or 0.0)),
             row["published_at"] or "",
-            -(float(row["score"] or 0.0)),
             row["vuln_id"],
         ),
     )
@@ -399,6 +401,7 @@ def top_hot(conn: sqlite3.Connection, limit: int | None = 20) -> list[dict[str, 
     for row in ranked:
         value = _signal_value(row)
         latest = _latest_signals(conn, row["vuln_id"])
+        display_score = attention_score_from_value(value)
         items.append(
             {
                 "vuln_id": row["vuln_id"],
@@ -413,7 +416,10 @@ def top_hot(conn: sqlite3.Connection, limit: int | None = 20) -> list[dict[str, 
                 "first_seen_at": row["first_seen_at"],
                 "signal_provider": row["provider"],
                 "signal_score": row["score"],
+                "hot_score": display_score if display_score is not None else row["score"],
                 "observed_at": row["observed_at"],
+                "query_count": value.get("query_count"),
+                "search_queries": value.get("search_queries", []),
                 "search_budget": value.get("search_budget"),
                 "result_count": value.get("result_count"),
                 "evidence_count": value.get("evidence_count"),
@@ -421,7 +427,14 @@ def top_hot(conn: sqlite3.Connection, limit: int | None = 20) -> list[dict[str, 
                 "evidence_types": value.get("evidence_types", []),
                 "source_types": value.get("source_types", []),
                 "urls": value.get("urls", []),
+                "search_hits": value.get("search_hits", []),
+                "evidence_details": value.get("evidence_details", []),
                 "headline": value.get("headline"),
+                "discovery_query_count": value.get("discovery_query_count"),
+                "discovery_queries": value.get("discovery_queries", []),
+                "discovery_result_count": value.get("discovery_result_count"),
+                "discovery_hits": value.get("discovery_hits", []),
+                "discovered_vuln_ids": value.get("discovered_vuln_ids", []),
             }
         )
     return items

@@ -43,7 +43,7 @@ REQUIRED_FIELDS = {
 MAX_STALENESS_HOURS = {
     "cve_program": 24,
     "kev": 3,
-    "hot": 24,
+    "hot": 6,
     "epss": 48,
     "ghsa": 24,
     "trivy": 24,

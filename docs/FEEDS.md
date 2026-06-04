@@ -6,7 +6,7 @@
 |------------|---------|-------------|-----------------|
 |CVE Program  |every 6h |24h          |Warn + use cache |
 |KEV         |hourly   |3h           |Alert + use cache|
-|Hot web intel|ad hoc   |24h          |Warn + use cache |
+|Hot web intel|hourly   |6h           |Warn + use cache |
 |EPSS        |daily    |48h          |Warn + use cache |
 |GHSA        |every 6h |24h          |Warn + use cache |
 |go-exploitdb|every 6h |48h          |Warn + use cache |
@@ -109,6 +109,8 @@ Observed workflow for the real database:
 4. Import CVE-linked rows with `python3 -m sync.fetch_exploitdb --db db/exploit.db`.
 
 For a bounded validation ingest, add `--min-year 2024` to the import command.
+
+If you want one top-level command that refreshes both the git mirrors and `db/exploit.db`, run `./scripts/refresh_all_sources.sh` first and then run `./scripts/ingest_recent_core_db.sh`.
 
 Observed facts from the current verification run:
 
@@ -405,17 +407,22 @@ For a bounded validation ingest, add `--min-year 2024`.
 
 ## Hot web intel
 
-- Source: web search over CVEs already present in `core.db`
+- Source: RSS / article-feed discovery over current vulnerability reporting, then resolution against `core.db`
 - Signal type: `hot`
 - Purpose: detect current external attention, active exploitation, or public exploitability that is not yet fully captured by KEV / exploit / vendor feeds
-- Positioning: reference-only signal; do not let `hot` outrank KEV, exploit, EPSS, or CVSS in the main priority view
+- Positioning: reference-only signal in the main risk view; hot-oriented views may use it as a first-class ranking input ahead of raw CVSS-only records
+- Refresh target: every 6 hours in local operations, with a bounded search cap
+- Storage model: append-only history in `signals`
+- Primary consumers: the `hot` CLI view and any review workflow that wants current attention separate from core risk ranking
+- Execution order: run `hot` only after `core.db` has been refreshed; otherwise candidate resolution will miss newly ingested CVEs
 
 ### Operating model
 
-- Start from a bounded report window, typically the same cutoff used for the current report.
-- Use the number of CVEs emitted by that report as the default search budget.
+- Start from broad RSS / article-feed discovery over current exploitation and advisory reporting.
+- Use the number of discovered vulnerabilities as the default search budget.
 - Keep the search budget bounded by a configurable cap so a large corpus does not fan out into an unbounded crawl.
-- Search only the CVEs already present in `core.db`.
+- Extract CVE IDs from feed items and resolve them against `core.db` before writing signals.
+- Treat the feed item title, summary, and source domain as the evidence payload for classification.
 - Prefer high-signal sources:
   - official vendor advisories and security blogs
   - CISA / government advisories
@@ -423,7 +430,7 @@ For a bounded validation ingest, add `--min-year 2024`.
   - researcher blogs and write-ups
   - X posts only when they contain a direct CVE reference, PoC, exploit, or clear corroboration
 - Do not treat a single social post as strong evidence on its own.
-- Use the search result count and evidence count as first-class signal fields.
+- Use the discovery result count and evidence count as first-class signal fields.
 
 ### Recommended `value_json`
 
@@ -431,13 +438,21 @@ For a bounded validation ingest, add `--min-year 2024`.
 {
   "window_cutoff": "2026-05-25T00:00:00+00:00",
   "search_budget": 20,
-  "search_queries": 3,
+  "query_budget": 3,
+  "discovery_queries": ["https://feeds.feedburner.com/TheHackersNews", "https://securityonline.info/feed/"],
+  "discovery_query_count": 3,
+  "discovery_result_count": 8,
+  "search_queries": ["\"Example vuln title\"", "\"Example vuln summary\" exploit OR PoC OR \"active exploitation\""],
   "result_count": 8,
   "evidence_count": 3,
   "independent_sources": 2,
   "evidence_types": ["kev", "active_exploitation", "public_poc"],
   "source_types": ["vendor", "cisa", "news"],
   "urls": ["https://...", "https://..."],
+  "discovery_hits": [{"query": "...", "title": "...", "summary": "...", "url": "...", "domain": "...", "published_at": "...", "cve_ids": ["CVE-2026-42945"]}],
+  "discovered_vuln_ids": ["CVE-2026-42945"],
+  "search_hits": [{"query": "...", "title": "...", "url": "...", "domain": "..."}],
+  "evidence_details": [{"evidence_type": "...", "source_type": "...", "weight": 0.95, "url": "...", "title": "...", "domain": "...", "query": "...", "matched_terms": ["..."]}],
   "headline": "short human-readable summary"
 }
 ```
@@ -449,22 +464,38 @@ For a bounded validation ingest, add `--min-year 2024`.
 - Public PoC / exploit reporting should produce a medium-strength `hot` signal.
 - Broad chatter without direct evidence should stay weak or be dropped.
 - Append one `hot` signal per vulnerability per run. Treat each run as a new observation in history.
+- `hot_score` is a confidence / attention score, not the main risk score.
+- The score is intentionally compressed so a small number of outliers do not all collapse to 1.0.
+- Main ranking still prefers `KEV > exploit > EPSS > CVSS > published_at`.
+- Operational threshold:
+  - `hot_score >= 0.85` = strong hot
+  - `0.70 <= hot_score < 0.85` = moderate hot
+  - `hot_score < 0.70` = weak hot / reference-only
 
 ### Production operation
 
 The fetcher should:
 
-1. Read the current report window from `core.db`.
-2. Pick the CVEs to search, using the report output count as the default budget.
-3. Run targeted web searches for each CVE.
-4. Convert the resulting evidence into a single append-only `hot` signal row per CVE.
-5. Write `fetch_log` with the normal success / error contract.
+1. Run broad RSS / article-feed discovery for current exploitation / advisory coverage.
+2. Extract CVE IDs from the feed items and resolve them against `core.db`.
+3. Convert the resulting feed items into a single append-only `hot` signal row per vulnerability.
+4. Write `fetch_log` with the normal success / error contract.
 
 Local command:
 
 ```bash
-python3 -m sync.fetch_hot --cutoff 2026-05-25T00:00:00+00:00 --search-cap 20
+python3 -m sync.fetch_hot --search-cap 20
 ```
+
+For frequent production runs, schedule the job every 6 hours. Keep the `--search-cap` bounded to avoid heavy search fan-out.
+
+### Operational notes
+
+- The current implementation uses RSS/article feeds instead of a search engine because search pages were unreliable in this environment.
+- Current feed sources are intentionally small and high-signal.
+- Duplicate observations are expected and are preserved in `signals` for history.
+- The `hot` CLI shows `hot_score` plus the reference-only evidence payload separately.
+- In local operations, run `hot` after the main `core.db` refresh step, not before it.
 
 ## Local feed quality
 
@@ -503,7 +534,7 @@ The default window is the latest three calendar years, computed from the current
 Current end-to-end flow for a reproducible local corpus:
 
 1. Run `db/migrate.py`.
-2. Refresh the local mirrors with `./scripts/update_data_mirrors.sh`. If you are offline and intentionally reusing the current mirrors, set `SKIP_MIRROR_REFRESH=1`.
+2. Refresh the source inputs with `./scripts/refresh_all_sources.sh`. If you are offline and intentionally reusing the current mirrors, set `SKIP_MIRROR_REFRESH=1`. If you want to skip the go-exploitdb refresh for a local-only run, set `SKIP_EXPLOITDB_UPDATE=1`.
 3. Run `./scripts/ingest_recent_core_db.sh` to fetch KEV and EPSS, ingest `cvelistV5`, GHSA, Trivy vuln-list, and Vulnrichment with `--min-year`, and finish with `python3 -m sync.feed_quality`.
 4. Optionally ingest `db/exploit.db` when that local source is present.
 

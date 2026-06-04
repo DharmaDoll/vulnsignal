@@ -5,9 +5,10 @@ import argparse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from collections import defaultdict
 
 from sync.common import FetchResult, append_signal, connect, log_fetch, utc_now
-from sync.hot_intel import collect_hot_evidence_for_vuln
+from sync.hot_intel import SearchHit, collect_hot_evidence_for_vuln, discover_hot_candidates
 
 
 FEED = "hot"
@@ -27,41 +28,56 @@ def _is_boundary(title: str | None, source: str | None) -> bool:
     return any(hint in text for hint in BOUNDARY_HINTS)
 
 
-def _candidate_query(cutoff: str) -> str:
-    return """
-        SELECT vuln_id, source, title, severity, cvss_score, published_at, first_seen_at
-        FROM vulnerabilities
-        WHERE first_seen_at >= ?
-        ORDER BY
-          COALESCE(cvss_score, 0) DESC,
-          CASE WHEN source = 'kev' THEN 1 ELSE 0 END DESC,
-          CASE WHEN source = 'ghsa' THEN 1 ELSE 0 END DESC,
-          first_seen_at DESC,
-          vuln_id ASC
-    """
-
-
-def _load_candidates(conn, cutoff: str, search_cap: int) -> tuple[list[dict[str, Any]], int]:
-    rows = list(conn.execute(_candidate_query(cutoff), (cutoff,)).fetchall())
-    total = 0
+def _load_candidates(conn, vuln_ids: list[str]) -> list[dict[str, Any]]:
+    if not vuln_ids:
+        return []
+    placeholders = ",".join("?" for _ in vuln_ids)
+    rows = list(
+        conn.execute(
+            f"""
+            SELECT vuln_id, source, title, summary, severity, cvss_score, published_at, first_seen_at
+            FROM vulnerabilities
+            WHERE vuln_id IN ({placeholders})
+            """,
+            tuple(vuln_ids),
+        ).fetchall()
+    )
+    by_id = {row["vuln_id"]: row for row in rows}
     candidates: list[dict[str, Any]] = []
-    for row in rows:
+    for vuln_id in vuln_ids:
+        row = by_id.get(vuln_id)
+        if row is None:
+            continue
         if _is_boundary(row["title"], row["source"]):
             continue
-        total += 1
-        if len(candidates) < search_cap:
-            candidates.append(
-                {
-                    "vuln_id": row["vuln_id"],
-                    "source": row["source"],
-                    "title": row["title"],
-                    "severity": row["severity"],
-                    "cvss_score": row["cvss_score"],
-                    "published_at": row["published_at"],
-                    "first_seen_at": row["first_seen_at"],
-                }
-            )
-    return candidates, total
+        candidates.append(
+            {
+                "vuln_id": row["vuln_id"],
+                "source": row["source"],
+                "title": row["title"],
+                "summary": row["summary"],
+                "severity": row["severity"],
+                "cvss_score": row["cvss_score"],
+                "published_at": row["published_at"],
+                "first_seen_at": row["first_seen_at"],
+            }
+        )
+    return candidates
+
+
+def _candidate_hits(discovery_hits: list[dict[str, Any]]) -> dict[str, list[SearchHit]]:
+    hits_by_vuln: dict[str, list[SearchHit]] = defaultdict(list)
+    for hit in discovery_hits:
+        title = " ".join(part for part in (hit.get("title"), hit.get("summary")) if part)
+        search_hit = SearchHit(
+            query=str(hit.get("query") or hit.get("feed") or ""),
+            title=title or str(hit.get("title") or ""),
+            url=str(hit.get("url") or ""),
+            domain=str(hit.get("domain") or ""),
+        )
+        for vuln_id in hit.get("cve_ids", []):
+            hits_by_vuln[vuln_id].append(search_hit)
+    return hits_by_vuln
 
 
 def sync(
@@ -78,7 +94,9 @@ def sync(
     errors = 0
     candidates: list[dict[str, Any]] = []
     try:
-        candidates, total_recent = _load_candidates(conn, cutoff, search_cap)
+        discovery = discover_hot_candidates(results_per_query=results_per_query, max_candidates=search_cap)
+        candidates = _load_candidates(conn, discovery["discovered_vuln_ids"])
+        hits_by_vuln = _candidate_hits(discovery["search_hits"])
         if dry_run:
             return FetchResult(rows_fetched=len(candidates), rows_written=0, cache_used=False)
 
@@ -87,8 +105,10 @@ def sync(
                 evidence = collect_hot_evidence_for_vuln(
                     candidate["vuln_id"],
                     title=candidate.get("title"),
+                    summary=candidate.get("summary"),
                     queries_per_vuln=queries_per_vuln,
                     results_per_query=results_per_query,
+                    hits=hits_by_vuln.get(candidate["vuln_id"], []),
                 )
             except Exception as exc:
                 errors += 1
@@ -99,11 +119,15 @@ def sync(
 
             value = {
                 "window_cutoff": cutoff,
-                "report_window_count": total_recent,
-                "search_budget": len(candidates),
+                "search_budget": len(discovery["discovered_vuln_ids"]),
                 "search_cap": search_cap,
                 "query_budget": queries_per_vuln,
                 "results_per_query": results_per_query,
+                "discovery_queries": discovery["search_queries"],
+                "discovery_query_count": discovery["query_count"],
+                "discovery_result_count": discovery["result_count"],
+                "discovery_hits": discovery["search_hits"],
+                "discovered_vuln_ids": discovery["discovered_vuln_ids"],
                 **evidence,
             }
             if append_signal(
@@ -116,6 +140,7 @@ def sync(
                 observed_at=utc_now(),
             ):
                 written += 1
+                conn.commit()
 
         if errors and written == 0:
             log_fetch(conn, FEED, "error", written, f"search failures for {errors} candidate(s)")
@@ -134,7 +159,7 @@ def sync(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--cutoff", help="ISO8601 cutoff for the report window. Defaults to seven days ago.")
+    parser.add_argument("--cutoff", help="Legacy metadata field; kept for backward-compatible logs.")
     parser.add_argument("--search-cap", type=int, default=DEFAULT_SEARCH_CAP, help="Maximum CVEs to search per run.")
     parser.add_argument("--queries-per-vuln", type=int, default=DEFAULT_QUERIES_PER_VULN)
     parser.add_argument("--results-per-query", type=int, default=DEFAULT_RESULTS_PER_QUERY)

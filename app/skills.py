@@ -136,6 +136,7 @@ def _print_table(rows: list[dict[str, Any]], columns: tuple[str, ...]) -> None:
 
 def _print_hot_rows(rows: list[dict[str, Any]], details: bool = False) -> None:
     priority_columns = (
+        "hot_score",
         "kev_present",
         "exploit_present",
         "epss_score",
@@ -151,9 +152,23 @@ def _print_hot_rows(rows: list[dict[str, Any]], details: bool = False) -> None:
         "source",
         "severity",
         "title",
+        "query_count",
+        "search_queries",
+        "search_budget",
+        "result_count",
+        "evidence_count",
+        "independent_sources",
+        "evidence_types",
+        "source_types",
+        "urls",
         "headline",
+        "discovery_query_count",
+        "discovery_queries",
+        "discovery_result_count",
+        "discovery_hits",
+        "discovered_vuln_ids",
     )
-    print("priority [KEV / exploit / EPSS / CVSS / published_at]")
+    print("priority [hot / KEV / exploit / EPSS / CVSS / published_at]")
     _print_table(rows, priority_columns)
     if details:
         print()

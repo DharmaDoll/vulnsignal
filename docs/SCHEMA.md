@@ -145,7 +145,7 @@ Signal type taxonomy:
 - `package_advisory` — package-level affected range (from Trivy JSON/vuln-list)
 - `vex` — vendor not-affected / affected assertion
 - `enrichment` — supplemental metadata (Vulnrichment, Trivy DB vulnerability metadata)
-- `hot` — current external attention / exploitation signal derived from web research
+- `hot` — current external attention / exploitation signal derived from web discovery and follow-up research over vulnerability titles and summaries
 - `ssvc_factor` — future SSVC inputs
 
 Initial feed quality metrics should stay simple:
