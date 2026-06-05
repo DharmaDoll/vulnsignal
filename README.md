@@ -22,6 +22,15 @@ python3 db/migrate.py
 ./scripts/ingest_recent_core_db.sh
 ```
 
+Recommended end-to-end flow for a local refresh and review:
+
+1. Run `python3 db/migrate.py`.
+2. Refresh mirrors and `db/exploit.db` with `./scripts/refresh_all_sources.sh`.
+3. Ingest the latest feed window with `./scripts/ingest_recent_core_db.sh`.
+4. Refresh web intel with `python3 -m sync.fetch_hot` after `core.db` is current.
+5. Inspect feed health with `python3 -m sync.feed_quality`.
+6. Use the Skills CLI or SQL queries to review the latest lists and deltas.
+
 If you only want the live KEV feed, run `python3 -m sync.fetch_kev` directly. If you only want the live EPSS snapshot, run `python3 -m sync.fetch_epss` directly. For a bounded validation corpus, prefer the wrapper script. It keeps the mirror refresh, KEV, EPSS, and recent advisory ingest window in one pass.
 
 `./scripts/ingest_recent_core_db.sh` now takes a lock so two refreshes do not run at the same time. It expects the local mirrors for CVE Program, GHSA, Trivy vuln-list, and Vulnrichment to be refreshed by `./scripts/update_data_mirrors.sh` first. If you also want a fresh `db/exploit.db`, run `./scripts/refresh_all_sources.sh` first. The ingest script stores the last successful mirror refs in `db/refresh_recent_core_db.refs`, so subsequent runs diff against the last ingested commit instead of `HEAD@{1}`. If network refresh is unavailable, set `SKIP_MIRROR_REFRESH=1` and the script will continue with the current local mirrors.

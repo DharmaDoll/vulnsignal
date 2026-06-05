@@ -538,4 +538,11 @@ Current end-to-end flow for a reproducible local corpus:
 3. Run `./scripts/ingest_recent_core_db.sh` to fetch KEV and EPSS, ingest `cvelistV5`, GHSA, Trivy vuln-list, and Vulnrichment with `--min-year`, and finish with `python3 -m sync.feed_quality`.
 4. Optionally ingest `db/exploit.db` when that local source is present.
 
+Manual review order after the ingest pass:
+
+1. Run `python3 -m sync.fetch_hot` only after `core.db` has been refreshed.
+2. Inspect `python3 -m sync.feed_quality` output for freshness and coverage.
+3. Use `python3 -m app.skills hot --limit 20 --details` or SQL queries to review the current `hot` signal history.
+4. Use the Skills CLI or direct SQL for the final report view.
+
 If you only need the newest operational KEV set, run `python3 -m sync.fetch_kev` directly. For the bounded 3-year validation corpus, prefer the wrapper script so the mirror refresh and quality check happen in the same pass. The mirror refresh step matters for the advisory feeds because `ingest_recent_core_db.sh` diffs against the last ingested mirror refs.
