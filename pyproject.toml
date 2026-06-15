@@ -1,0 +1,11 @@
+[project]
+name = "vulnsignal"
+version = "0.0.0"
+description = "Lean vulnerability intelligence platform"
+requires-python = ">=3.12"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.0",
+]
+

@@ -18,6 +18,8 @@
 
 - Retry: exponential backoff, base 5s, cap 300s, 3 attempts minimum
 - On all retries exhausted: write `fetch_log` row with `status='error'`, exit cleanly
+
+Command examples below use `python3` for portability. If you are using `uv`, prefer `uv run python -m ...` for the same repo commands.
 - **Never delete existing data on failure** — try DNS-over-HTTPS for name resolution first, then fall back to the last known good cache state
 - `data_freshness()` API endpoint must read `fetch_log` to surface staleness per feed; `fetch_log.cache_used` records whether the latest successful run used a cache fallback
 
@@ -239,16 +241,17 @@ Operational notes:
 
 - The fetcher reads local checkout or unpacked archive content only.
 - All Trivy-shaped normalization stays in `sync/trivy_adapter.py`.
-- The output signal type remains `package_advisory`.
+- The fetcher updates `vulnerabilities` and the local cache, but it no longer appends `package_advisory` rows to `core.db`.
+- If package-level context is needed later, resolve it on demand from the local vuln-list mirror instead of persisting the full history.
 - The Trivy DB path stays reserved for vulnerability metadata enrichment and scanner-aligned CVSS/severity context.
 
 For a bounded validation ingest, add `--min-year 2024`.
 
 Day 1 note:
 
-- `vuln-list` is useful when we want to improve package-range quality and test coverage, but it is not required to start asset matching.
+- `vuln-list` is still useful for package-range quality and test coverage, but the full package history does not need to live in `core.db`.
 - If the immediate goal is to join against existing asset inventories, the current Trivy JSON path and scanner-aligned sources are usually enough.
-- A `vuln-list` sync can be added later if package coverage or fixed-version fidelity becomes the limiting factor.
+- A `vuln-list` lookup can be done later, on demand, when package coverage or fixed-version fidelity becomes the limiting factor.
 - For now, the `osv` target inside `aquasecurity/vuln-list` is considered sufficient; we do not need a separate `OSV.dev` ingest until coverage or freshness gaps show up in analysis.
 
 -----
@@ -410,8 +413,10 @@ For a bounded validation ingest, add `--min-year 2024`.
 - Source: RSS / article-feed discovery over current vulnerability reporting, then resolution against `core.db`
 - Signal type: `hot`
 - Purpose: detect current external attention, active exploitation, or public exploitability that is not yet fully captured by KEV / exploit / vendor feeds
+- Execution environment: run this from a machine with working outbound HTTP/DNS. In this project, `hot` is a local-run feature; Codex Cloud or other restricted-network environments may not be able to resolve or fetch the RSS sources reliably.
 - Positioning: reference-only signal in the main risk view; hot-oriented views may use it as a first-class ranking input ahead of raw CVSS-only records
 - Refresh target: every 6 hours in local operations, with a bounded search cap
+- Operational detection target: surface notable records within about 4 days of `first_seen_at`
 - Storage model: append-only history in `signals`
 - Primary consumers: the `hot` CLI view and any review workflow that wants current attention separate from core risk ranking
 - Execution order: run `hot` only after `core.db` has been refreshed; otherwise candidate resolution will miss newly ingested CVEs
@@ -421,6 +426,8 @@ For a bounded validation ingest, add `--min-year 2024`.
 - Start from broad RSS / article-feed discovery over current exploitation and advisory reporting.
 - Use the number of discovered vulnerabilities as the default search budget.
 - Keep the search budget bounded by a configurable cap so a large corpus does not fan out into an unbounded crawl.
+- Current default discovery depth is 20 items per RSS feed per run.
+- Optional extra discovery terms can be supplied on the CLI to widen the web search beyond the built-in baseline.
 - Extract CVE IDs from feed items and resolve them against `core.db` before writing signals.
 - Treat the feed item title, summary, and source domain as the evidence payload for classification.
 - Prefer high-signal sources:
@@ -431,6 +438,25 @@ For a bounded validation ingest, add `--min-year 2024`.
   - X posts only when they contain a direct CVE reference, PoC, exploit, or clear corroboration
 - Do not treat a single social post as strong evidence on its own.
 - Use the discovery result count and evidence count as first-class signal fields.
+
+### Built-in baseline and optional manual terms
+
+The fetcher starts with a small built-in baseline of high-signal discovery terms:
+
+- `active exploitation`
+- `in the wild`
+- `PoC`
+- `zero-day`
+
+If the baseline is too thin, the fetcher broadens with additional low-priority discovery terms:
+
+- `CVE-2026`
+- `CVE-2025`
+- `exploit`
+- `weaponized`
+- `vulnerability`
+
+The CLI `--query-term` arguments are additive. Use them only when you want to widen coverage further beyond both the built-in baseline and the broadening set.
 
 ### Recommended `value_json`
 
@@ -471,6 +497,9 @@ For a bounded validation ingest, add `--min-year 2024`.
   - `hot_score >= 0.85` = strong hot
   - `0.70 <= hot_score < 0.85` = moderate hot
   - `hot_score < 0.70` = weak hot / reference-only
+- SLA note:
+  - 4 days is the practical target for early detection
+  - 3 days is often too strict and will miss legitimate late-arriving hot coverage
 
 ### Production operation
 
@@ -484,22 +513,73 @@ The fetcher should:
 Local command:
 
 ```bash
-python3 -m sync.fetch_hot --search-cap 20
+uv run python -m sync.fetch_hot --search-cap 20
+```
+
+Profile shortcuts:
+
+```bash
+uv run python -m sync.fetch_hot --profile strict
+uv run python -m sync.fetch_hot --profile balanced
+uv run python -m sync.fetch_hot --profile broad
+```
+
+To evaluate one or more CVEs directly without running discovery, repeat `--vuln-id`:
+
+```bash
+uv run python -m sync.fetch_hot --vuln-id CVE-2026-42945
+uv run python -m sync.fetch_hot --vuln-id CVE-2026-42945 --vuln-id CVE-2026-3300
+```
+
+This path skips RSS / DuckDuckGo discovery and only gathers evidence for the
+specified vuln_ids already present in `core.db`.
+
+To widen discovery with manual terms, repeat `--query-term`:
+
+```bash
+uv run python -m sync.fetch_hot --search-cap 20 --query-term "Palo Alto" --query-term "active exploitation"
 ```
 
 For frequent production runs, schedule the job every 6 hours. Keep the `--search-cap` bounded to avoid heavy search fan-out.
 
+### Model case: one practical schedule
+
+This is an example operational pattern, not a required configuration.
+
+- Daily:
+  - `db/migrate.py`
+  - `./scripts/refresh_all_sources.sh`
+  - `./scripts/ingest_recent_core_db.sh`
+  - `uv run python -m sync.feed_quality`
+  - report generation
+- Every 6 hours:
+  - `uv run python -m sync.fetch_hot`
+- Every hour, if you want a faster KEV watch:
+  - `uv run python -m sync.fetch_kev`
+
+The intent is:
+
+- keep `core.db` fresh once per day
+- refresh `hot` often enough to catch current attention
+- track KEV more aggressively if you need faster escalation visibility
+
+Do not treat this as a hard requirement. It is a model case for local operations.
+If your execution environment has restricted outbound networking, run the `hot` step from a local shell with working DNS and HTTP access.
+
 ### Operational notes
 
 - The current implementation uses RSS/article feeds instead of a search engine because search pages were unreliable in this environment.
+- `hot` is expected to be run from a local environment with outbound network access; if that is not available, the feed may log zero discoveries even when the code is healthy.
 - Current feed sources are intentionally small and high-signal.
 - Duplicate observations are expected and are preserved in `signals` for history.
 - The `hot` CLI shows `hot_score` plus the reference-only evidence payload separately.
 - In local operations, run `hot` after the main `core.db` refresh step, not before it.
+- When running `hot` from Codex or any restricted environment, use an approval/escalated run because the job needs outbound HTTP/DNS.
+- If `--query-term` is omitted, the fetcher still uses the built-in baseline queries above in addition to RSS/article-feed discovery. The manual CLI terms are an expansion layer on top of that baseline.
 
 ## Local feed quality
 
-- Command: `python3 -m sync.feed_quality`
+- Command: `uv run python -m sync.feed_quality`
 - Reads only `core.db`
 - Reports simple per-feed metrics for early data-quality assessment
 
@@ -519,7 +599,7 @@ The script:
 - fetches KEV and EPSS from the live feeds, falling back to the local cache when needed
 - ingests CVE Program, GHSA, Trivy vuln-list, and Vulnrichment with a rolling `MIN_YEAR` cutoff
 - optionally ingests `db/exploit.db` when that local source exists
-- finishes with `python3 -m sync.feed_quality`
+- finishes with `uv run python -m sync.feed_quality`
 - takes a lock so only one refresh run touches `core.db` at a time
 - stores the last successful mirror refs in `db/refresh_recent_core_db.refs` and reuses them on the next run
 
@@ -535,14 +615,14 @@ Current end-to-end flow for a reproducible local corpus:
 
 1. Run `db/migrate.py`.
 2. Refresh the source inputs with `./scripts/refresh_all_sources.sh`. If you are offline and intentionally reusing the current mirrors, set `SKIP_MIRROR_REFRESH=1`. If you want to skip the go-exploitdb refresh for a local-only run, set `SKIP_EXPLOITDB_UPDATE=1`.
-3. Run `./scripts/ingest_recent_core_db.sh` to fetch KEV and EPSS, ingest `cvelistV5`, GHSA, Trivy vuln-list, and Vulnrichment with `--min-year`, and finish with `python3 -m sync.feed_quality`.
+3. Run `./scripts/ingest_recent_core_db.sh` to fetch KEV and EPSS, ingest `cvelistV5`, GHSA, Trivy vuln-list, and Vulnrichment with `--min-year`, and finish with `uv run python -m sync.feed_quality`.
 4. Optionally ingest `db/exploit.db` when that local source is present.
 
 Manual review order after the ingest pass:
 
-1. Run `python3 -m sync.fetch_hot` only after `core.db` has been refreshed.
-2. Inspect `python3 -m sync.feed_quality` output for freshness and coverage.
-3. Use `python3 -m app.skills hot --limit 20 --details` or SQL queries to review the current `hot` signal history.
+1. Run `uv run python -m sync.fetch_hot` only after `core.db` has been refreshed.
+2. Inspect `uv run python -m sync.feed_quality` output for freshness and coverage.
+3. Use `uv run python -m app.skills hot --limit 20 --details` or SQL queries to review the current `hot` signal history.
 4. Use the Skills CLI or direct SQL for the final report view.
 
 If you only need the newest operational KEV set, run `python3 -m sync.fetch_kev` directly. For the bounded 3-year validation corpus, prefer the wrapper script so the mirror refresh and quality check happen in the same pass. The mirror refresh step matters for the advisory feeds because `ingest_recent_core_db.sh` diffs against the last ingested mirror refs.

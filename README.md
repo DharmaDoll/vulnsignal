@@ -10,28 +10,37 @@ Use `./scripts/refresh_all_sources.sh` when you also want to refresh `db/exploit
 The mirror script uses shallow clones and recreates broken mirrors automatically.
 
 For a reproducible smaller validation run, use `./scripts/ingest_recent_core_db.sh`.
-It refreshes the local mirrors, ingests KEV, EPSS, CVE Program, GHSA, Trivy vuln-list, and Vulnrichment for the latest three calendar years by default, and finishes with `python3 -m sync.feed_quality`.
+It refreshes the local mirrors, ingests KEV, EPSS, CVE Program, GHSA, Trivy vuln-list, and Vulnrichment for the latest three calendar years by default, optionally ingests `db/exploit.db` when present, and finishes with `python3 -m sync.feed_quality`.
 
 Current implementation plan: `docs/ROADMAP.md`
+
+Python execution:
+
+- If you have `uv` installed, prefer `uv run python -m ...` for repo commands.
+- The repository now carries a minimal `pyproject.toml` and `uv.lock` so `uv` can manage the Python runtime and future lockfile.
 
 Quick local refresh:
 
 ```bash
-python3 db/migrate.py
+uv run python db/migrate.py
 ./scripts/refresh_all_sources.sh
 ./scripts/ingest_recent_core_db.sh
 ```
 
 Recommended end-to-end flow for a local refresh and review:
 
-1. Run `python3 db/migrate.py`.
+1. Run `uv run python db/migrate.py`.
 2. Refresh mirrors and `db/exploit.db` with `./scripts/refresh_all_sources.sh`.
 3. Ingest the latest feed window with `./scripts/ingest_recent_core_db.sh`.
-4. Refresh web intel with `python3 -m sync.fetch_hot` after `core.db` is current.
-5. Inspect feed health with `python3 -m sync.feed_quality`.
+4. Refresh web intel with `uv run python -m sync.fetch_hot` after `core.db` is current.
+5. Inspect feed health with `uv run python -m sync.feed_quality`.
 6. Use the Skills CLI or SQL queries to review the latest lists and deltas.
 
-If you only want the live KEV feed, run `python3 -m sync.fetch_kev` directly. If you only want the live EPSS snapshot, run `python3 -m sync.fetch_epss` directly. For a bounded validation corpus, prefer the wrapper script. It keeps the mirror refresh, KEV, EPSS, and recent advisory ingest window in one pass.
+For one practical scheduling example, see the `Hot web intel` section in [docs/FEEDS.md](docs/FEEDS.md). It shows a model case with daily core refresh, 6-hour hot collection, and optional hourly KEV watching. Treat it as an example, not a hard requirement.
+For `hot` discovery keywords, see the suggested manual query terms in [docs/FEEDS.md](docs/FEEDS.md).
+`hot` should be run from a local shell with working outbound HTTP/DNS; restricted-network environments may return zero discoveries even when the code is healthy.
+
+If you only want the live KEV feed, run `uv run python -m sync.fetch_kev` directly. If you only want the live EPSS snapshot, run `uv run python -m sync.fetch_epss` directly. For a bounded validation corpus, prefer the wrapper script. It keeps the mirror refresh, KEV, EPSS, and recent advisory ingest window in one pass.
 
 `./scripts/ingest_recent_core_db.sh` now takes a lock so two refreshes do not run at the same time. It expects the local mirrors for CVE Program, GHSA, Trivy vuln-list, and Vulnrichment to be refreshed by `./scripts/update_data_mirrors.sh` first. If you also want a fresh `db/exploit.db`, run `./scripts/refresh_all_sources.sh` first. The ingest script stores the last successful mirror refs in `db/refresh_recent_core_db.refs`, so subsequent runs diff against the last ingested commit instead of `HEAD@{1}`. If network refresh is unavailable, set `SKIP_MIRROR_REFRESH=1` and the script will continue with the current local mirrors.
 
@@ -95,31 +104,35 @@ Observed in this project:
 
 ```
 project/
-├── AGENTS.md              94行  ← ルート命令書
+├── AGENTS.md
 ├── app/
-│   └── AGENTS.md          27行  ← API/スコアリング層専用
+│   └── AGENTS.md
 ├── sync/
-│   └── AGENTS.md          26行  ← フィード/アダプタ層専用
+│   └── AGENTS.md
 ├── docs/
-│   ├── ARCHITECTURE.md         ← 人間向け設計思想
-│   ├── SCHEMA.md               ← テーブル定義・マイグレーション
-│   ├── SCORING.md              ← スコア計算式
-│   └── FEEDS.md                ← フィード仕様・アダプタ契約
+│   ├── ARCHITECTURE.md
+│   ├── SCHEMA.md
+│   ├── SCORING.md
+│   └── FEEDS.md
 └── .agents/skills/
-    ├── scoring/SKILL.md        ← スコアリング作業時に自動呼び出し
-    ├── feeds/SKILL.md          ← フィード/アダプタ作業時に自動呼び出し
-    └── schema/SKILL.md         ← スキーマ/マイグレーション作業時に自動呼び出し
+    ├── api/SKILL.md
+    ├── core-db-analysis/SKILL.md
+    ├── core-db-insights/SKILL.md
+    ├── feeds/SKILL.md
+    ├── hot-intel/SKILL.md
+    ├── schema/SKILL.md
+    └── scoring/SKILL.md
 ```
 
 
 Trivy の主経路は advisory JSON と `aquasecurity/vuln-list` です。compiled DB は任意のバックフィル用途としてのみ残しています。
-取得手順とローカル cache の要件は [docs/FEEDS.md](/home/calvet/git/vulnsignal/docs/FEEDS.md) を参照してください。
+取得手順とローカル cache の要件は [docs/FEEDS.md](docs/FEEDS.md) を参照してください。
 `core.db` が他の ingest でロックされている場合は、`VULNSIGNAL_DB_PATH=/tmp/vulnsignal-core.db` のように別 DB を指定して再現用 ingest を回せます。
 
 Trivy DB を手動で読む場合の実行例:
 
 ```bash
-python3 -m sync.fetch_trivy_db --db-dir db/trivy_cache.db
+uv run python -m sync.fetch_trivy_db --db-dir db/trivy_cache.db
 ```
 
 `db/trivy_cache.db` には `trivy.db` と `metadata.json` が必要です。
