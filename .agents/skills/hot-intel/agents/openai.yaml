@@ -1,0 +1,7 @@
+interface:
+  display_name: "Hot Intel"
+  short_description: "Refresh and inspect hot web-intel evidence"
+  default_prompt: "Use $hot-intel to refresh and inspect hot web-intel signals in core.db, then review the evidence details."
+
+policy:
+  allow_implicit_invocation: true

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import socket
 import sqlite3
 import subprocess
@@ -64,18 +65,59 @@ def fetch_bytes(url: str, headers: dict[str, str] | None = None, attempts: int =
                             return response.read()
                 except (URLError, TimeoutError, socket.gaierror) as retry_exc:
                     last_error = retry_exc
+            try:
+                return _fetch_bytes_via_curl(url, headers=headers, timeout=60)
+            except FetchError as curl_exc:
+                last_error = curl_exc
             if attempt < attempts - 1:
                 time.sleep(min(300, 5 * (2**attempt)))
     raise FetchError(str(last_error))
+
+
+def _fetch_bytes_via_curl(url: str, headers: dict[str, str] | None = None, timeout: int = 60) -> bytes:
+    cmd_parts = [
+        "curl",
+        "-4",
+        "-L",
+        "--fail",
+        "--silent",
+        "--show-error",
+        "--max-time",
+        str(timeout),
+    ]
+    for key, value in (headers or {}).items():
+        cmd_parts.extend(["-H", f"{key}: {value}"])
+    cmd_parts.append(url)
+    shell_cmd = " ".join(shlex.quote(part) for part in cmd_parts)
+    result = subprocess.run(["bash", "-lc", shell_cmd], check=False, capture_output=True)
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace").strip()
+        raise FetchError(stderr or f"curl exited with status {result.returncode}")
+    return result.stdout
 
 
 def _resolve_via_doh(host: str) -> str | None:
     query_headers = {"Accept": "application/dns-json", "User-Agent": "vulnsignal/0.1"}
     for endpoint in DOH_ENDPOINTS:
         try:
-            request = Request(f"{endpoint}?name={host}&type=A", headers=query_headers)
-            with urlopen(request, timeout=15) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+            cmd = [
+                "curl",
+                "-4",
+                "--silent",
+                "--show-error",
+                "--fail",
+                "--max-time",
+                "15",
+                "-H",
+                f"Accept: {query_headers['Accept']}",
+                "-H",
+                f"User-Agent: {query_headers['User-Agent']}",
+                f"{endpoint}?name={host}&type=A",
+            ]
+            result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+            if result.returncode != 0:
+                continue
+            payload = json.loads(result.stdout)
             if payload.get("Status") != 0:
                 continue
             answers = payload.get("Answer") or []

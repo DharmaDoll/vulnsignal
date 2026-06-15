@@ -5,12 +5,11 @@ import argparse
 from itertools import islice
 from pathlib import Path
 
-from sync.common import ROOT, FetchResult, JsonArrayCacheWriter, append_signal, connect, git_changed_files, log_fetch, read_cache, upsert_vulnerability, utc_now
+from sync.common import ROOT, FetchResult, JsonArrayCacheWriter, connect, git_changed_files, log_fetch, read_cache, upsert_vulnerability, utc_now
 from sync.trivy_adapter import iter_advisories_from_directory
 
 
 FEED = "trivy_vuln_list"
-PROVIDER = "Trivy vuln-list"
 DEFAULT_TARGETS = ("alpine", "debian", "ubuntu", "ghsa", "glad", "go", "osv", "seal")
 DEFAULT_SOURCE_DIR = ROOT / "data" / "aquasecurity-vuln-list-mirror"
 MIN_YEAR = 2015
@@ -53,7 +52,6 @@ def sync(
     changed_since_ref: str | None = None,
 ) -> FetchResult:
     conn = None
-    written = 0
     fetched = 0
     try:
         targets = targets or list(DEFAULT_TARGETS)
@@ -86,23 +84,6 @@ def sync(
                         published_at=advisory.published_at,
                         first_seen_at=advisory.published_at,
                     )
-                    if append_signal(
-                        conn,
-                        vuln_id=advisory.vuln_id,
-                        signal_type="package_advisory",
-                        provider=PROVIDER,
-                        score=None,
-                        value={
-                            "ecosystem": advisory.ecosystem,
-                            "package_name": advisory.package_name,
-                            "affected_versions": advisory.affected_versions,
-                            "fixed_version": advisory.fixed_version,
-                            "severity": advisory.severity,
-                            "source_path": str(source_dir),
-                        },
-                        observed_at=advisory.observed_at,
-                    ):
-                        written += 1
                     cache.write(
                         {
                             "vuln_id": advisory.vuln_id,
@@ -135,34 +116,17 @@ def sync(
                     published_at=advisory.published_at,
                     first_seen_at=advisory.published_at,
                 )
-                if append_signal(
-                    conn,
-                    vuln_id=advisory.vuln_id,
-                    signal_type="package_advisory",
-                    provider=PROVIDER,
-                    score=None,
-                    value={
-                        "ecosystem": advisory.ecosystem,
-                        "package_name": advisory.package_name,
-                        "affected_versions": advisory.affected_versions,
-                        "fixed_version": advisory.fixed_version,
-                        "severity": advisory.severity,
-                        "source_path": str(source_dir),
-                    },
-                    observed_at=advisory.observed_at,
-                ):
-                    written += 1
-        log_fetch(conn, FEED, "ok", written)
+        log_fetch(conn, FEED, "ok", 0)
         conn.commit()
-        return FetchResult(rows_fetched=fetched, rows_written=written, cache_used=False)
+        return FetchResult(rows_fetched=fetched, rows_written=0, cache_used=False)
     except Exception as exc:
         if conn is None:
             conn = connect()
         else:
             conn.rollback()
-        log_fetch(conn, FEED, "error", written, str(exc))
+        log_fetch(conn, FEED, "error", 0, str(exc))
         conn.commit()
-        return FetchResult(rows_fetched=fetched, rows_written=written, cache_used=False)
+        return FetchResult(rows_fetched=fetched, rows_written=0, cache_used=False)
     finally:
         if conn is not None:
             conn.close()

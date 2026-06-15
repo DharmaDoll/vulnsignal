@@ -16,6 +16,79 @@ def _write_json(path: Path, payload: object) -> None:
 
 
 class FetchTrivyVulnListTests(TestCase):
+    def test_sync_ingests_ubuntu_patches_advisory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            core_db = tmp_path / "core.db"
+            source_dir = tmp_path / "vuln-list"
+            advisory_dir = source_dir / "ubuntu" / "2026"
+            advisory_dir.mkdir(parents=True)
+            _write_json(
+                advisory_dir / "CVE-2026-49975.json",
+                {
+                    "Candidate": "CVE-2026-49975",
+                    "Description": "HTTP/2 Bomb denial of service issue",
+                    "Priority": "medium",
+                    "PublicDate": "2026-06-03T00:00:00Z",
+                    "References": [
+                        "https://www.cve.org/CVERecord?id=CVE-2026-49975",
+                        "https://ubuntu.com/security/notices/USN-8384-1",
+                    ],
+                    "Patches": {
+                        "apache2": {
+                            "jammy": {"Status": "released", "Note": "2.4.52-1ubuntu4.21"},
+                            "noble": {"Status": "released", "Note": "2.4.58-1ubuntu8.13"},
+                        },
+                        "nginx": {
+                            "devel": {"Status": "pending", "Note": "1.30.1-3ubuntu1"},
+                            "jammy": {"Status": "needs-triage", "Note": ""},
+                        },
+                    },
+                },
+            )
+            migrate(core_db)
+
+            def connect_to_core_db() -> sqlite3.Connection:
+                conn = sqlite3.connect(core_db)
+                conn.row_factory = sqlite3.Row
+                return conn
+
+            with patch("sync.fetch_trivy_vuln_list.connect", side_effect=connect_to_core_db):
+                result = fetch_trivy_vuln_list.sync(source_dir=source_dir, dry_run=False)
+
+            self.assertEqual(2, result.rows_fetched)
+            self.assertEqual(0, result.rows_written)
+            self.assertFalse(result.cache_used)
+
+            conn = connect_to_core_db()
+            conn.row_factory = sqlite3.Row
+            try:
+                vuln_row = conn.execute(
+                    "SELECT source, title, summary, severity, published_at, first_seen_at FROM vulnerabilities WHERE vuln_id = ?",
+                    ("CVE-2026-49975",),
+                ).fetchone()
+                signal_rows = conn.execute(
+                    """
+                    SELECT provider, value_json
+                    FROM signals
+                    WHERE vuln_id = ? AND signal_type = 'package_advisory'
+                    ORDER BY observed_at, id
+                    """,
+                    ("CVE-2026-49975",),
+                ).fetchall()
+            finally:
+                conn.close()
+
+            self.assertIsNotNone(vuln_row)
+            self.assertEqual("trivy", vuln_row["source"])
+            self.assertEqual("HTTP/2 Bomb denial of service issue", vuln_row["title"])
+            self.assertEqual("HTTP/2 Bomb denial of service issue", vuln_row["summary"])
+            self.assertEqual("medium", vuln_row["severity"])
+            self.assertEqual("2026-06-03T00:00:00Z", vuln_row["published_at"])
+            self.assertEqual("2026-06-03T00:00:00Z", vuln_row["first_seen_at"])
+            self.assertEqual(0, len(signal_rows))
+            self.assertEqual(0, result.rows_written)
+
     def test_sync_includes_seal_target_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -55,7 +128,7 @@ class FetchTrivyVulnListTests(TestCase):
                 result = fetch_trivy_vuln_list.sync(source_dir=source_dir, dry_run=False)
 
             self.assertEqual(1, result.rows_fetched)
-            self.assertEqual(1, result.rows_written)
+            self.assertEqual(0, result.rows_written)
             self.assertFalse(result.cache_used)
 
             conn = connect_to_core_db()

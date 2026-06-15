@@ -9,7 +9,7 @@ Key decisions:
 - CVE Program is the canonical CVE reference backbone.
 - NVD is optional enrichment, not a blocker for MVP ingestion.
 - GHSA is a core feed.
-- Trivy's primary path is advisory JSON/vuln-list; the compiled DB is optional backfill only.
+- Trivy's primary path is advisory JSON/vuln-list; the compiled DB is optional backfill only and stays out of the default refresh flow.
 - VEX `not_affected` excludes items from rankings.
 - Assets start as CSV import, including coarse technology observations like OS / framework / middleware.
 - Feed quality should be judged with simple per-feed metrics and a combined operational assessment.
@@ -68,7 +68,7 @@ Current implementation:
 - reads from a local Trivy DB cache directory containing `trivy.db` and `metadata.json`
 - starts with selected JSON targets only: `alpine`, `debian`, `ubuntu`, `ghsa`, `glad`, `go`, and `osv`
 - sends all Trivy-shaped data through `sync/trivy_adapter.py`
-- writes package advisory signals from Trivy JSON/vuln-list and vulnerability enrichment from Trivy DB to `core.db`
+- writes package advisory signals from Trivy JSON, keeps vuln-list package history out of `core.db`, and writes vulnerability enrichment from Trivy DB to `core.db`
 - reports field coverage for `ecosystem`, `package_name`, `affected_versions`, and `fixed_version`
 - the local DB acquisition steps are documented in `docs/FEEDS.md`
 
@@ -85,7 +85,7 @@ All direct Trivy DB access stays inside `sync/trivy_adapter.py` and the dedicate
 
 - Whether GHSA `unreviewed` advisories should be included after reviewed advisories are stable.
 - Whether GHSA should be fetched as full pagination or updated incrementally by `updated_at`.
-- Whether to run all go-exploitdb sources by default or keep a smaller source set for routine refresh.
+- Routine refresh currently fetches all go-exploitdb source families through the wrapper; the remaining question is whether to trim that set later for cost reasons.
 - Whether internal override should eventually become the highest-trust severity source.
 
 ## go-exploitdb Verification Notes
@@ -108,4 +108,4 @@ The current go-exploitdb behavior suggests the following:
 - The database is not a single-purpose CVE table; it stores multiple source families, so adapter boundaries need to remain narrow.
 - The CVE-linked subset is materially smaller than the raw Offensive Security feed, which matters for refresh cost and downstream signal density.
 - `fetch_meta` is the stable place to read schema version from current builds.
-- The project should treat `exploitdb` as the default operational source and add the auxiliary sources only when a use case justifies the extra volume.
+- The current wrapper fetches all go-exploitdb source families by default, but the downstream import only keeps CVE-linked rows. The source set can still be trimmed later if refresh cost becomes a problem.

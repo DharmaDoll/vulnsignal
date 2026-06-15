@@ -352,7 +352,17 @@ def find_vuln(conn: sqlite3.Connection, vuln_id: str) -> dict[str, Any] | None:
     }
 
 
-def top_hot(conn: sqlite3.Connection, limit: int | None = 20) -> list[dict[str, Any]]:
+def top_hot(
+    conn: sqlite3.Connection,
+    limit: int | None = 20,
+    vuln_ids: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    params: list[Any] = []
+    vuln_filter = ""
+    if vuln_ids:
+        placeholders = ",".join("?" for _ in vuln_ids)
+        vuln_filter = f" AND s.vuln_id IN ({placeholders})"
+        params.extend(vuln_ids)
     rows = conn.execute(
         """
         SELECT
@@ -373,8 +383,10 @@ def top_hot(conn: sqlite3.Connection, limit: int | None = 20) -> list[dict[str, 
         FROM signals s
         JOIN vulnerabilities v ON v.vuln_id = s.vuln_id
         WHERE s.signal_type = 'hot'
-        ORDER BY COALESCE(s.score, 0) DESC, s.observed_at DESC, s.id DESC
-        """
+        """ + vuln_filter + """
+        ORDER BY s.observed_at DESC, s.id DESC
+        """,
+        tuple(params),
     ).fetchall()
 
     latest_by_vuln: dict[str, sqlite3.Row] = {}
@@ -402,6 +414,20 @@ def top_hot(conn: sqlite3.Connection, limit: int | None = 20) -> list[dict[str, 
         value = _signal_value(row)
         latest = _latest_signals(conn, row["vuln_id"])
         display_score = attention_score_from_value(value)
+        source_label = None
+        for item in value.get("evidence_details", []) or []:
+            if isinstance(item, dict):
+                label = item.get("source_label")
+                if label:
+                    source_label = str(label)
+                    break
+        if source_label is None:
+            for item in value.get("search_hits", []) or []:
+                if isinstance(item, dict):
+                    label = item.get("source_label")
+                    if label:
+                        source_label = str(label)
+                        break
         items.append(
             {
                 "vuln_id": row["vuln_id"],
@@ -426,6 +452,7 @@ def top_hot(conn: sqlite3.Connection, limit: int | None = 20) -> list[dict[str, 
                 "independent_sources": value.get("independent_sources"),
                 "evidence_types": value.get("evidence_types", []),
                 "source_types": value.get("source_types", []),
+                "source_label": source_label,
                 "urls": value.get("urls", []),
                 "search_hits": value.get("search_hits", []),
                 "evidence_details": value.get("evidence_details", []),

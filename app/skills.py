@@ -60,12 +60,34 @@ def recommend_patch_queue(limit: int = 20, db_path: Path | None = None) -> list[
         conn.close()
 
 
-def top_hot(limit: int = 20, db_path: Path | None = None) -> list[dict[str, Any]]:
+def top_hot(
+    limit: int = 20,
+    db_path: Path | None = None,
+    vuln_ids: list[str] | None = None,
+) -> list[dict[str, Any]]:
     conn = _connection(db_path)
     try:
-        return scoring.top_hot(conn, limit=limit)
+        return scoring.top_hot(conn, limit=limit, vuln_ids=vuln_ids)
     finally:
         conn.close()
+
+
+def refresh_hot_for_vuln_ids(
+    vuln_ids: list[str],
+    db_path: Path | None = None,
+    profile: str | None = None,
+    query_terms: list[str] | None = None,
+    simple: bool = False,
+) -> Any:
+    from sync import fetch_hot
+
+    return fetch_hot.sync(
+        vuln_ids=vuln_ids,
+        db_path=db_path,
+        profile=profile,
+        query_terms=query_terms,
+        simple=simple,
+    )
 
 
 def has_exploit(vuln_id: str, db_path: Path | None = None) -> bool:
@@ -152,6 +174,7 @@ def _print_hot_rows(rows: list[dict[str, Any]], details: bool = False) -> None:
         "source",
         "severity",
         "title",
+        "source_label",
         "query_count",
         "search_queries",
         "search_budget",
@@ -187,11 +210,22 @@ def main() -> None:
     hot_parser.add_argument("--limit", type=int, default=20)
     hot_parser.add_argument("--details", action="store_true", help="Show reference-only hot evidence columns.")
     hot_parser.add_argument("--json", action="store_true")
+    hot_parser.add_argument("--vuln-id", action="append", default=[], help="Directly evaluate one or more vuln_ids for hot evidence. Can be repeated.")
+    hot_parser.add_argument("--profile", choices=("strict", "balanced", "broad"), help="Shortcut for hot search settings when evaluating vuln_ids.")
+    hot_parser.add_argument("--query-term", action="append", default=[], help="Optional extra discovery term to widen hot coverage when evaluating vuln_ids.")
+    hot_parser.add_argument("--simple", action="store_true", help="Evaluate vuln_ids with RSS-only discovery mode.")
 
     args = parser.parse_args()
 
     if args.command == "hot":
-        rows = top_hot(limit=args.limit)
+        if args.vuln_id:
+            refresh_hot_for_vuln_ids(
+                vuln_ids=args.vuln_id,
+                profile=args.profile,
+                query_terms=args.query_term,
+                simple=args.simple,
+            )
+        rows = top_hot(limit=args.limit, vuln_ids=args.vuln_id or None)
         if args.json:
             print(json.dumps(rows, indent=2, sort_keys=True))
         else:

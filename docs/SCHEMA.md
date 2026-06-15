@@ -25,10 +25,10 @@ Canonical vulnerability records. One row per vuln_id.
 ```sql
 CREATE TABLE vulnerabilities (
   vuln_id      TEXT PRIMARY KEY,   -- CVE-YYYY-NNNNN / GHSA-xxx / vendor ID
-  source       TEXT NOT NULL,      -- 'nvd' | 'ghsa' | 'vendor'
+  source       TEXT NOT NULL,      -- ingest source label such as 'cve_program' | 'ghsa' | 'trivy' | 'kev'
   title        TEXT,
   summary      TEXT,
-  severity     TEXT,               -- 'critical' | 'high' | 'medium' | 'low' | 'none'
+  severity     TEXT,               -- source-preserved severity; mixed case values may appear
   cvss_score   REAL,
   cvss_source  TEXT,               -- which feed provided this score
   published_at TEXT,
@@ -39,7 +39,7 @@ CREATE TABLE vulnerabilities (
 
 ### assets
 
-Known systems and workloads. Current phase expects CSV import; future ingestion can replace or supplement it.
+Known systems and workloads. Current phase uses CSV import.
 
 ```sql
 CREATE TABLE assets (
@@ -55,7 +55,7 @@ CREATE TABLE assets (
 
 ### asset_observations
 
-Append-only coarse technology observations for an asset. Use this when you know the system is running a family or stack, but not the exact version.
+Append-only coarse technology observations for an asset.
 
 ```sql
 CREATE TABLE asset_observations (
@@ -71,7 +71,7 @@ CREATE TABLE asset_observations (
 );
 ```
 
-This table is intentionally coarse. It exists so the platform can rank risk from partial observations like `Ubuntu 22` or `Nuxt.js` even when exact package versions are unavailable.
+Use it to rank risk from partial observations like `Ubuntu 22` or `Nuxt.js` when exact versions are unavailable.
 
 ### findings
 
@@ -109,7 +109,7 @@ CREATE TABLE decisions (
 
 ### signals
 
-Append-only intelligence event feed. Core risk-relevant observations live here, but high-volume current-state feeds can use dedicated tables and only emit material changes as signals.
+Append-only intelligence event feed for risk-relevant observations.
 
 ```sql
 CREATE TABLE signals (
@@ -125,7 +125,7 @@ CREATE TABLE signals (
 
 ### epss_current
 
-Current EPSS values. EPSS is high-volume, so daily full snapshots are upserted here instead of appended wholesale to `signals`.
+Current EPSS values. Daily full snapshots are upserted here instead of appended wholesale to `signals`.
 
 ```sql
 CREATE TABLE epss_current (
@@ -142,9 +142,9 @@ Signal type taxonomy:
 - `epss` — EPSS probability score
 - `kev` — CISA KEV listing
 - `exploit` — PoC/exploit presence (from go-exploitdb)
-- `package_advisory` — package-level affected range (from Trivy JSON/vuln-list)
+- `package_advisory` — package-level affected range (from Trivy JSON; vuln-list context is resolved on demand)
 - `vex` — vendor not-affected / affected assertion
-- `enrichment` — supplemental metadata (Vulnrichment, Trivy DB vulnerability metadata)
+- `enrichment` — supplemental metadata (CVE Program, GHSA, Vulnrichment, Trivy DB vulnerability metadata)
 - `hot` — current external attention / exploitation signal derived from web discovery and follow-up research over vulnerability titles and summaries
 - `ssvc_factor` — future SSVC inputs
 
@@ -176,8 +176,7 @@ CREATE TABLE fetch_log (
 
 ### report_history
 
-Append-only log of emitted notifications. This is for deduping alert delivery
-such as Slack; it does not filter the underlying report output.
+Append-only log of emitted notifications for deduping alert delivery; it does not filter the underlying report output.
 
 ```sql
 CREATE TABLE report_history (

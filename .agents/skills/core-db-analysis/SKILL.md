@@ -101,6 +101,12 @@ vulnerabilities", or similar phrasing without asking about a specific asset.
    - the computed score
 5. Do not include asset terms unless the user explicitly asks for asset impact.
 
+## Hot signal handling
+
+- Treat `hot` as an early-attention signal, not as the main risk score.
+- Use a practical detection target of about 4 days from `first_seen_at`.
+- When a report includes `hot`, present it as a separate watchlist or reference-only block unless the user explicitly asks to rank by hot attention.
+
 EPSS requirement:
 
 - Every report must include EPSS values for notable vulnerabilities.

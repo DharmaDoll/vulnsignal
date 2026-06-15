@@ -17,6 +17,7 @@ from sync.common import FetchError, ROOT, read_text_cache, write_text_cache
 
 TRIVY_DB_SCHEMA_VERSION = 2
 TRIVY_DB_DEFAULT_DIR = ROOT / "db" / "trivy_cache.db"
+TRIVY_VULN_LIST_DEFAULT_DIR = ROOT / "data" / "aquasecurity-vuln-list-mirror"
 TRIVY_DB_HELPER_DIR = ROOT / "cmd" / "trivydbdump"
 TRIVY_DB_CACHE_FEED = "trivy_db_dump"
 TRIVY_DB_CACHE_SUFFIX = "jsonl"
@@ -40,6 +41,7 @@ class AdvisoryRecord:
     source_path: str | None = None
     title: str | None = None
     summary: str | None = None
+    references: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -152,6 +154,82 @@ def package_from_payload(payload: dict[str, Any], context: dict[str, Any]) -> tu
     )
 
 
+def ubuntu_advisories_from_payload(
+    payload: dict[str, Any],
+    observed_at: str,
+    context: dict[str, Any] | None = None,
+    source_hint: str | None = None,
+    source_path: str | None = None,
+) -> list[AdvisoryRecord]:
+    context = context or {}
+    vuln_id = normalize_vuln_id(
+        first_value(payload, ("Candidate", "candidate", "VulnerabilityID", "vulnerability_id", "vuln_id", "cve_id", "cve"))
+        or context.get("vuln_id")
+    )
+    if not vuln_id:
+        return []
+
+    patches = payload.get("Patches")
+    if not isinstance(patches, dict):
+        return []
+
+    title = first_value(payload, ("Title", "title", "Description", "description", "UbuntuDescription"))
+    summary = first_value(payload, ("Description", "description", "UbuntuDescription", "details", "summary"))
+    severity = normalize_severity(first_value(payload, ("Priority", "priority", "Severity", "severity")) or payload.get("severity"))
+    published_at = published_at_from_payload(payload)
+
+    advisories: list[AdvisoryRecord] = []
+    for package_name, releases in patches.items():
+        if not isinstance(package_name, str) or not isinstance(releases, dict):
+            continue
+
+        affected_versions: list[str] = []
+        fixed_version_candidates: list[str] = []
+
+        for series, details in releases.items():
+            if not isinstance(series, str) or not isinstance(details, dict):
+                continue
+
+            status = first_value(details, ("Status", "status"))
+            note = first_value(details, ("Note", "note"))
+            status_text = str(status).strip() if status not in (None, "") else ""
+            note_text = str(note).strip() if note not in (None, "") else ""
+
+            parts = [part for part in (status_text, series.strip(), note_text) if part]
+            if parts:
+                affected_versions.append(":".join(parts))
+
+            if note_text:
+                if status_text == "released":
+                    fixed_version_candidates.insert(0, note_text)
+                elif status_text == "pending":
+                    fixed_version_candidates.append(note_text)
+                else:
+                    fixed_version_candidates.append(note_text)
+
+        fixed_version = next((candidate for candidate in fixed_version_candidates if candidate), None)
+
+        advisories.append(
+            AdvisoryRecord(
+                vuln_id=vuln_id,
+                source=source_hint or "trivy-vuln-list",
+                ecosystem=str(context.get("ecosystem") or "ubuntu"),
+                package_name=package_name,
+                affected_versions=affected_versions,
+                fixed_version=fixed_version,
+                severity=severity,
+                observed_at=observed_at,
+                published_at=str(published_at) if published_at else None,
+                source_path=source_path,
+                title=str(title) if title else None,
+                summary=str(summary) if summary else None,
+                references=normalize_list(first_value(payload, ("References", "references"))),
+            )
+        )
+
+    return advisories
+
+
 def range_strings(range_item: dict[str, Any]) -> list[str]:
     strings: list[str] = []
     range_type = first_value(range_item, ("type", "Type"))
@@ -242,7 +320,7 @@ def published_at_from_payload(payload: dict[str, Any], *extra_sources: dict[str,
             continue
         published_at = first_value(
             source,
-            ("PublishedDate", "PublishedAt", "published_at", "published", "datePublished"),
+            ("PublishedDate", "PublishedAt", "PublicDate", "PublicDateAtUSN", "published_at", "published", "datePublished"),
         )
         if published_at:
             return str(published_at)
@@ -340,6 +418,7 @@ def advisory_from_payload(
         source_path=source_path,
         title=first_value(payload, ("Title", "title", "summary")),
         summary=first_value(payload, ("Description", "description", "details", "summary")),
+        references=normalize_list(first_value(payload, ("References", "references"))),
     )
 
 
@@ -401,6 +480,11 @@ def parse_advisories(
             advisories.extend(parse_advisories(child, observed_at, context, source_hint, source_path))
         return advisories
 
+    if "Patches" in payload and isinstance(payload["Patches"], dict):
+        advisories.extend(ubuntu_advisories_from_payload(payload, observed_at, context, source_hint, source_path))
+        if advisories:
+            return advisories
+
     advisory = advisory_from_payload(payload, observed_at, context, source_hint, source_path)
     if advisory:
         advisories.append(advisory)
@@ -450,6 +534,34 @@ def load_advisories_from_directory(
     source_files: list[Path] | None = None,
 ) -> list[AdvisoryRecord]:
     return list(iter_advisories_from_directory(source_dir, observed_at, targets=targets, source_files=source_files))
+
+
+def load_advisories_for_vuln_id_from_directory(
+    source_dir: Path,
+    vuln_id: str,
+    observed_at: str,
+    targets: list[str] | None = None,
+) -> list[AdvisoryRecord]:
+    if source_dir.is_file():
+        paths = [source_dir] if source_dir.name == f"{vuln_id}.json" else []
+    else:
+        candidate_dirs = [source_dir / target for target in targets] if targets else [source_dir]
+        paths: list[Path] = []
+        for candidate_dir in candidate_dirs:
+            if not candidate_dir.exists():
+                continue
+            paths.extend(path for path in candidate_dir.rglob(f"{vuln_id}.json") if path.is_file())
+        paths = sorted(dict.fromkeys(paths))
+
+    advisories: list[AdvisoryRecord] = []
+    for path in paths:
+        try:
+            relative_parts = path.relative_to(source_dir).parts
+        except ValueError:
+            relative_parts = path.parts
+        source_hint = relative_parts[0] if relative_parts else path.parent.name
+        advisories.extend(iter_advisories_from_json(path, observed_at, source_hint=source_hint))
+    return advisories
 
 
 def ecosystem_from_source_path(source_path: list[str]) -> str:

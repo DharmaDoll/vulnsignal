@@ -61,6 +61,7 @@ Include these sections in the report:
 ## Insight rules
 
 - Treat `enrichment + epss` as baseline context, `package_advisory` as remediation context, and `exploit` / `kev` as escalation signals.
+- Treat `hot` as an early-attention signal with a practical detection target of about 4 days from `first_seen_at`; use it to catch notable vulnerabilities before KEV / exploit fully mature.
 - Highlight when one source dominates the corpus.
 - Highlight when many records lack `severity` or `cvss_score`.
 - Highlight when `package_advisory` is present without `enrichment`, or vice versa.
