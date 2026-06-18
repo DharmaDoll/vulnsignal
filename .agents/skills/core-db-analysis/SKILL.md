@@ -17,7 +17,76 @@ be stale or newly created.
 ## Scope
 
 Use this skill when the user wants a repeatable report from `db/core.db`, not a
-free-form one-off summary.
+free-form one-off summary. If the intent is ambiguous, prefer the shortest
+actionable vulnerability list over a dashboard-style report.
+
+## Fast list mode
+
+If the user asks for a quick or simple vulnerability list, or says things like
+"必要な脆弱性一覧だけ", skip the full analytical sections and return only the
+minimum rows needed to act.
+
+In fast list mode:
+
+1. Use the same bounded cutoff, but only compute the rows needed for the list.
+2. Return at most 10-20 vulnerabilities.
+3. Keep columns to:
+   - `vuln_id`
+   - `title`
+   - `source`
+   - `published_at`
+   - `first_seen_at`
+   - `CVSS`
+   - `EPSS`
+   - `signals`
+   - one short reason
+4. Prefer `exploit`, `kev`, `hot`, or high-EPSS rows when the user wants
+   "important" items.
+5. Do not include year-by-year trend, source mix, severity mix, or overlap
+   unless the user explicitly asks for them.
+
+## Daily latest-30 mode
+
+Use this when the user says things like "today 時点", "今日時点", "最新順", or
+"注目すべきものを30件". This is the canonical short report.
+
+1. Compute an explicit cutoff at the start of the current day in the local
+   report timezone.
+2. Exclude boundary/network appliance vendors by default.
+3. Return exactly the newest 30 vuln_ids by `first_seen_at DESC` unless the user
+   asks for a different ranking.
+4. Keep the output compact:
+   - `vuln_id`
+   - `title`
+   - `source`
+   - `published_at`
+   - `first_seen_at`
+   - `CVSS`
+   - `EPSS`
+   - `signals`
+   - one short reason
+5. Prefer rows with `kev`, `exploit`, `hot`, or high EPSS when multiple items
+   share the same recency.
+6. Do not expand into trend/source/severity sections unless explicitly asked.
+
+## Pinpoint watchlist mode
+
+Use this when the user asks for "注目の脆弱性", "more pinpoint", "important
+vulnerabilities", or similar wording and wants fewer false positives than a
+plain latest list.
+
+1. Use a 7-day cutoff by default unless the user specifies a different window.
+2. Keep only vulnerabilities that meet at least one of:
+   - `kev`
+   - `exploit`
+   - `hot`
+   - `cvss_score >= 9.0`
+   - `epss >= 0.05`
+3. Prefer 10-30 rows, sorted by the same general-impact score used elsewhere.
+4. If the result set becomes too small, expand only by relaxing EPSS slightly,
+   not by reintroducing pure recent rows first.
+5. Keep the output compact and actionable. If a row has no strong signal, do not
+   include it in this mode.
 
 ## Required workflow
 
@@ -56,13 +125,24 @@ Use this structure:
 
 1. Scope and cutoff
 2. Dataset size
-3. Trend summary
-4. Source mix
-5. Severity mix
-6. Signal overlap
-7. Coverage and gaps
-8. Representative examples
-9. Short conclusion
+3. Needed vulnerabilities only
+4. Coverage and gaps
+5. Short conclusion
+
+For the daily latest-30 mode, collapse this to:
+
+1. Scope and cutoff
+2. Latest 30 vulnerabilities
+3. Short conclusion
+
+For pinpoint watchlists, use:
+
+1. Scope and cutoff
+2. Pinpoint watchlist
+3. Short conclusion
+
+For full analysis requests, expand back to the detailed sections in the
+reference queries.
 
 ## Recent asset-hit risks
 
@@ -101,11 +181,15 @@ vulnerabilities", or similar phrasing without asking about a specific asset.
    - the computed score
 5. Do not include asset terms unless the user explicitly asks for asset impact.
 
+For a quick exploit list, return only the ranked table and skip the broader
+dataset summary.
+
 ## Hot signal handling
 
 - Treat `hot` as an early-attention signal, not as the main risk score.
 - Use a practical detection target of about 4 days from `first_seen_at`.
 - When a report includes `hot`, present it as a separate watchlist or reference-only block unless the user explicitly asks to rank by hot attention.
+- In fast list mode, include `hot` only if it is directly relevant to the user's ask.
 
 EPSS requirement:
 

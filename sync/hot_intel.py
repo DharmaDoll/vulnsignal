@@ -571,6 +571,23 @@ def _match_terms(text: str) -> list[str]:
     return terms
 
 
+NEGATION_RE = re.compile(
+    r"\b(?:no|not|without|never|none|lack|lacks|lacking|absence|absent)\b(?:\W+\w+){0,3}\W*$",
+    re.IGNORECASE,
+)
+
+
+def _contains_positive_phrase(text: str, phrase: str) -> bool:
+    normalized = text.lower()
+    phrase_re = re.compile(re.escape(phrase.lower()))
+    for match in phrase_re.finditer(normalized):
+        prefix = normalized[max(0, match.start() - 120) : match.start()]
+        if NEGATION_RE.search(prefix):
+            continue
+        return True
+    return False
+
+
 def classify_hit(hit: SearchHit) -> HotEvidence | None:
     content_text = f"{hit.title} {hit.url}".lower()
     query_text = hit.query.lower()
@@ -603,10 +620,19 @@ def classify_hit(hit: SearchHit) -> HotEvidence | None:
         weight = 0.25
     elif any(part in domain for part in NEWS_DOMAINS):
         source_type = "news"
-        if "active exploitation" in content_text or "actively exploited" in content_text or "in the wild" in content_text:
+        if (
+            _contains_positive_phrase(content_text, "active exploitation")
+            or _contains_positive_phrase(content_text, "actively exploited")
+            or _contains_positive_phrase(content_text, "in the wild")
+        ):
             evidence_type = "active_exploitation"
             weight = 0.95
-        elif "proof of concept" in content_text or "poc" in content_text or "exploit" in content_text or "weaponized" in content_text:
+        elif (
+            _contains_positive_phrase(content_text, "proof of concept")
+            or re.search(r"\bpoc\b", content_text)
+            or _contains_positive_phrase(content_text, "exploit")
+            or _contains_positive_phrase(content_text, "weaponized")
+        ):
             evidence_type = "public_poc"
             weight = 0.75
         else:
@@ -615,18 +641,27 @@ def classify_hit(hit: SearchHit) -> HotEvidence | None:
     elif any(needle in content_text for needle in ("advisory", "security update", "security bulletin", "mitigation")):
         evidence_type = "vendor_advisory"
         source_type = "vendor"
-        if "active exploitation" in content_text or "actively exploited" in content_text:
+        if _contains_positive_phrase(content_text, "active exploitation") or _contains_positive_phrase(content_text, "actively exploited"):
             weight = 0.9
-        elif "exploit" in content_text or "poc" in content_text or "proof of concept" in content_text:
+        elif _contains_positive_phrase(content_text, "exploit") or re.search(r"\bpoc\b", content_text) or _contains_positive_phrase(content_text, "proof of concept"):
             weight = 0.7
         else:
             weight = 0.65
     elif matched_terms:
-        if "active exploitation" in search_text or "actively exploited" in search_text or "in the wild" in search_text:
+        if (
+            _contains_positive_phrase(search_text, "active exploitation")
+            or _contains_positive_phrase(search_text, "actively exploited")
+            or _contains_positive_phrase(search_text, "in the wild")
+        ):
             evidence_type = "active_exploitation"
             source_type = "search"
             weight = 0.82
-        elif "proof of concept" in search_text or "poc" in search_text or "exploit" in search_text or "weaponized" in search_text:
+        elif (
+            _contains_positive_phrase(search_text, "proof of concept")
+            or re.search(r"\bpoc\b", search_text)
+            or _contains_positive_phrase(search_text, "exploit")
+            or _contains_positive_phrase(search_text, "weaponized")
+        ):
             evidence_type = "public_poc"
             source_type = "search"
             weight = 0.6

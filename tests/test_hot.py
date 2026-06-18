@@ -40,6 +40,19 @@ class HotIntelTests(TestCase):
         self.assertIsNotNone(social)
         self.assertEqual("x_mention", social.evidence_type)
 
+    def test_classify_hit_ignores_negated_in_the_wild_phrases(self) -> None:
+        hit = classify_hit(
+            SearchHit(
+                query='"CVE-2026-2473" exploit OR PoC OR "active exploitation"',
+                title="Google Vertex AI SDK flaw saw no exploitation in the wild",
+                url="https://thehackernews.com/2026/06/google-vertex-ai-sdk-flaw-let-attackers.html",
+                domain="thehackernews.com",
+            )
+        )
+
+        self.assertIsNotNone(hit)
+        self.assertNotEqual("active_exploitation", hit.evidence_type)
+
     def test_classify_hit_uses_query_context_for_generic_blog_results(self) -> None:
         hit = classify_hit(
             SearchHit(

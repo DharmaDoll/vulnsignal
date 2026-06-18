@@ -34,10 +34,10 @@ Recommended end-to-end flow for a local refresh and review:
 3. Ingest the latest feed window with `./scripts/ingest_recent_core_db.sh`.
 4. Refresh web intel with `uv run python -m sync.fetch_hot` after `core.db` is current.
 5. Inspect feed health with `uv run python -m sync.feed_quality`.
-6. Use the Skills CLI or SQL queries to review the latest lists and deltas.
+6. For a quick answer, use `uv run python -m app.skills hot --limit 10 --details` or a short SQL list.
 
-For one practical scheduling example, see the `Hot web intel` section in [docs/FEEDS.md](docs/FEEDS.md). It shows a model case with daily core refresh, 6-hour hot collection, and optional hourly KEV watching. Treat it as an example, not a hard requirement.
-For `hot` discovery keywords, see the suggested manual query terms in [docs/FEEDS.md](docs/FEEDS.md).
+For one practical scheduling example, see the `Hot web intel` section in [docs/FEEDS.md](docs/FEEDS.md). It shows a model case with daily core refresh, 6-hour hot collection, and a short hot watchlist. Treat it as an example, not a hard requirement.
+For `hot` discovery keywords and short-list review examples, see [docs/FEEDS.md](docs/FEEDS.md).
 `hot` should be run from a local shell with working outbound HTTP/DNS; restricted-network environments may return zero discoveries even when the code is healthy.
 
 If you only want the live KEV feed, run `uv run python -m sync.fetch_kev` directly. If you only want the live EPSS snapshot, run `uv run python -m sync.fetch_epss` directly. For a bounded validation corpus, prefer the wrapper script. It keeps the mirror refresh, KEV, EPSS, and recent advisory ingest window in one pass.
@@ -87,6 +87,8 @@ Trivy vuln-list execution path:
 1. Mirror `aquasecurity/vuln-list` locally with `git clone --depth 1 https://github.com/aquasecurity/vuln-list data/aquasecurity-vuln-list-mirror`.
 2. Refresh that mirror with `git -C data/aquasecurity-vuln-list-mirror pull --ff-only`.
 3. Ingest the local JSON tree with `python3 -m sync.fetch_trivy_vuln_list --source-dir data/aquasecurity-vuln-list-mirror`.
+4. Use the mirror as the normal source of truth when you need package ranges, fixed versions, or target-specific advisory detail; do not expect `core.db` alone to retain that full history.
+5. For a concrete lookup recipe, see `docs/FEEDS.md` and use the adapter helper against the local mirror before deciding whether to persist anything. The same recipe also points you to `core.db`, `db/exploit.db`, and `hot` when you need a deeper investigation.
 
 Vulnrichment execution path:
 
@@ -126,6 +128,7 @@ project/
 
 
 Trivy の主経路は advisory JSON と `aquasecurity/vuln-list` です。compiled DB は任意のバックフィル用途としてのみ残しています。
+package-range や fixed-version の確認が必要なときは、`aquasecurity/vuln-list` の local mirror を前提にしてください。`core.db` には full history を持たせません。
 取得手順とローカル cache の要件は [docs/FEEDS.md](docs/FEEDS.md) を参照してください。
 `core.db` が他の ingest でロックされている場合は、`VULNSIGNAL_DB_PATH=/tmp/vulnsignal-core.db` のように別 DB を指定して再現用 ingest を回せます。
 
