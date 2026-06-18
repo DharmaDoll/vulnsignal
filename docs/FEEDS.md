@@ -260,7 +260,6 @@ Day 1 note:
 On-demand lookup recipe:
 
 For the full repeatable single-CVE workflow, see [docs/DEEP_DIVE.md](DEEP_DIVE.md).
-
 1. Identify the `vuln_id` or package name you want to inspect.
 2. Confirm the local mirror has a hit:
 
