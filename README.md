@@ -88,7 +88,8 @@ Trivy vuln-list execution path:
 2. Refresh that mirror with `git -C data/aquasecurity-vuln-list-mirror pull --ff-only`.
 3. Ingest the local JSON tree with `python3 -m sync.fetch_trivy_vuln_list --source-dir data/aquasecurity-vuln-list-mirror`.
 4. Use the mirror as the normal source of truth when you need package ranges, fixed versions, or target-specific advisory detail; do not expect `core.db` alone to retain that full history.
-5. For a concrete lookup recipe, see `docs/FEEDS.md` and use the adapter helper against the local mirror before deciding whether to persist anything. The same recipe also points you to `core.db`, `db/exploit.db`, and `hot` when you need a deeper investigation.
+5. For a concrete lookup recipe, see [docs/DEEP_DIVE.md](docs/DEEP_DIVE.md). It points you to `core.db`, `vuln-list`, `db/exploit.db`, and `hot` in a repeatable order.
+6. For agent routing, keep the final watchlist or conclusion in the main agent and use sub-agents only for bounded evidence gathering.
 
 Vulnrichment execution path:
 
