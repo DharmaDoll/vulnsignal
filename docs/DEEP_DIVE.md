@@ -26,9 +26,10 @@ bounded worker only for one CVE, one lookup, or one freshness check at a time.
 1. Check `db/core.db` for the `vulnerabilities` row.
 2. Inspect `signals` for `kev`, `exploit`, and `hot`.
 3. Resolve package context from the local `aquasecurity/vuln-list` mirror.
-4. Inspect `db/exploit.db` through `sync.exploit_adapter` if exploit detail matters.
-5. Refresh or inspect `hot` if current attention matters.
-6. Persist only if the result belongs in normal feed ingest.
+4. If exploit detail matters, inspect `db/exploit.db` through
+   `sync.exploit_adapter`.
+5. If current attention matters, refresh or inspect `hot`.
+6. Persist only if the result should become part of the normal feed ingest.
 
 ## Local sources
 
@@ -86,17 +87,15 @@ python3 -m sync.fetch_hot --vuln-id "$VULN_ID" --simple
 `trivy_vuln_list`, `go_exploitdb`, and `hot`. Use `--refresh-hot` only when you
 need to refresh the local attention signal first.
 
-Keep the note keyed by:
+## Reproducibility checklist
+
+When you finish the lookup, keep these fields in the note:
 
 - `vuln_id`
 - `package_name`
 - `fixed_version`
 - `signal_type`
 - the local file path you used
-
-## Reproducibility checklist
-
-When you finish the lookup, keep the same fields listed above.
 
 If the item is worth keeping, rerun the bounded ingest after the deep dive so
 the platform state stays consistent with the investigation.
