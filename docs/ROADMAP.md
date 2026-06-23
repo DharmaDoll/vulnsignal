@@ -10,6 +10,7 @@ Key decisions:
 - NVD is optional enrichment, not a blocker for MVP ingestion.
 - GHSA is a core feed.
 - Trivy's primary path is advisory JSON/vuln-list; the compiled DB is optional backfill only and stays out of the default refresh flow.
+- The local `aquasecurity/vuln-list` mirror is the normal source for package-range and fixed-version lookups; keep it available unless you have explicitly chosen to drop that capability.
 - VEX `not_affected` excludes items from rankings.
 - Assets start as CSV import, including coarse technology observations like OS / framework / middleware.
 - Feed quality should be judged with simple per-feed metrics and a combined operational assessment.

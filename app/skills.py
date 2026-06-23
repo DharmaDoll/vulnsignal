@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from app.routing import plan_request
 from sync.common import DB_PATH, connect
 
 from app import scoring
@@ -20,7 +21,7 @@ def find_vuln(vuln_id: str, db_path: Path | None = None) -> dict[str, Any] | Non
         conn.close()
 
 
-def top_risks(limit: int = 10, db_path: Path | None = None) -> list[dict[str, Any]]:
+def top_risks(limit: int = 20, db_path: Path | None = None) -> list[dict[str, Any]]:
     conn = _connection(db_path)
     try:
         return scoring.top_risks(conn, limit=limit)
@@ -98,12 +99,32 @@ def has_exploit(vuln_id: str, db_path: Path | None = None) -> bool:
         conn.close()
 
 
+def affected_assets(vuln_id: str, db_path: Path | None = None) -> list[dict[str, Any]]:
+    conn = _connection(db_path)
+    try:
+        return scoring.affected_assets(conn, vuln_id)
+    finally:
+        conn.close()
+
+
+def explain_asset_risk(hostname: str, db_path: Path | None = None) -> dict[str, Any] | None:
+    conn = _connection(db_path)
+    try:
+        return scoring.explain_asset_risk(conn, hostname)
+    finally:
+        conn.close()
+
+
 def data_freshness(db_path: Path | None = None) -> list[dict[str, Any]]:
     conn = _connection(db_path)
     try:
         return scoring.data_freshness(conn)
     finally:
         conn.close()
+
+
+def route_request(request: str) -> dict[str, Any]:
+    return plan_request(request).to_dict()
 
 
 def record_report_history(
@@ -215,6 +236,37 @@ def main() -> None:
     hot_parser.add_argument("--query-term", action="append", default=[], help="Optional extra discovery term to widen hot coverage when evaluating vuln_ids.")
     hot_parser.add_argument("--simple", action="store_true", help="Evaluate vuln_ids with RSS-only discovery mode.")
 
+    route_parser = subparsers.add_parser("route", help="Plan main/sub-agent routing for a request.")
+    route_parser.add_argument("request", help="Free-form request to route.")
+    route_parser.add_argument("--json", action="store_true")
+
+    vuln_parser = subparsers.add_parser("vuln", help="Show one vulnerability from core.db.")
+    vuln_parser.add_argument("vuln_id")
+    vuln_parser.add_argument("--json", action="store_true")
+
+    risks_parser = subparsers.add_parser("risks", help="Show the top risk-ranked findings.")
+    risks_parser.add_argument("--limit", type=int, default=20)
+    risks_parser.add_argument("--json", action="store_true")
+
+    patch_parser = subparsers.add_parser("patch-queue", help="Show the patch queue.")
+    patch_parser.add_argument("--limit", type=int, default=20)
+    patch_parser.add_argument("--json", action="store_true")
+
+    has_exploit_parser = subparsers.add_parser("has-exploit", help="Check whether a vuln has exploit evidence.")
+    has_exploit_parser.add_argument("vuln_id")
+    has_exploit_parser.add_argument("--json", action="store_true")
+
+    assets_parser = subparsers.add_parser("assets", help="Show affected assets for one vulnerability.")
+    assets_parser.add_argument("vuln_id")
+    assets_parser.add_argument("--json", action="store_true")
+
+    asset_risk_parser = subparsers.add_parser("asset-risk", help="Explain risk for one asset hostname.")
+    asset_risk_parser.add_argument("hostname")
+    asset_risk_parser.add_argument("--json", action="store_true")
+
+    freshness_parser = subparsers.add_parser("freshness", help="Show feed freshness from fetch_log.")
+    freshness_parser.add_argument("--json", action="store_true")
+
     args = parser.parse_args()
 
     if args.command == "hot":
@@ -230,6 +282,69 @@ def main() -> None:
             print(json.dumps(rows, indent=2, sort_keys=True))
         else:
             _print_hot_rows(rows, details=args.details)
+    elif args.command == "route":
+        plan = plan_request(args.request)
+        if args.json:
+            print(json.dumps(plan.to_dict(), indent=2, sort_keys=True))
+        else:
+            print(f"mode: {plan.mode}")
+            print(f"primary_agent: {plan.primary_agent}")
+            print(f"confidence: {plan.confidence}")
+            print(f"summary: {plan.summary}")
+            if plan.sub_agents:
+                print("sub_agents:")
+                for step in plan.sub_agents:
+                    print(f"  - role: {step.role}")
+                    print(f"    task: {step.task}")
+                    print(f"    reason: {step.reason}")
+                    if step.inputs:
+                        print(f"    inputs: {', '.join(step.inputs)}")
+                    if step.commands:
+                        print("    commands:")
+                        for command in step.commands:
+                            print(f"      - {command}")
+    elif args.command == "vuln":
+        row = find_vuln(args.vuln_id)
+        if args.json:
+            print(json.dumps(row, indent=2, sort_keys=True, ensure_ascii=False))
+        else:
+            print(json.dumps(row, indent=2, sort_keys=True, ensure_ascii=False))
+    elif args.command == "risks":
+        rows = top_risks(limit=args.limit)
+        if args.json:
+            print(json.dumps(rows, indent=2, sort_keys=True, ensure_ascii=False))
+        else:
+            print(json.dumps(rows, indent=2, sort_keys=True, ensure_ascii=False))
+    elif args.command == "patch-queue":
+        rows = recommend_patch_queue(limit=args.limit)
+        if args.json:
+            print(json.dumps(rows, indent=2, sort_keys=True, ensure_ascii=False))
+        else:
+            print(json.dumps(rows, indent=2, sort_keys=True, ensure_ascii=False))
+    elif args.command == "has-exploit":
+        result = {"vuln_id": args.vuln_id, "has_exploit": has_exploit(args.vuln_id)}
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False))
+        else:
+            print(json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False))
+    elif args.command == "assets":
+        rows = affected_assets(args.vuln_id)
+        if args.json:
+            print(json.dumps(rows, indent=2, sort_keys=True, ensure_ascii=False))
+        else:
+            print(json.dumps(rows, indent=2, sort_keys=True, ensure_ascii=False))
+    elif args.command == "asset-risk":
+        row = explain_asset_risk(args.hostname)
+        if args.json:
+            print(json.dumps(row, indent=2, sort_keys=True, ensure_ascii=False))
+        else:
+            print(json.dumps(row, indent=2, sort_keys=True, ensure_ascii=False))
+    elif args.command == "freshness":
+        rows = data_freshness()
+        if args.json:
+            print(json.dumps(rows, indent=2, sort_keys=True, ensure_ascii=False))
+        else:
+            print(json.dumps(rows, indent=2, sort_keys=True, ensure_ascii=False))
 
 
 if __name__ == "__main__":

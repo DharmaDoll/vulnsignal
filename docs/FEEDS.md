@@ -212,6 +212,8 @@ If `db/core.db` is locked by another ingest run and you want to validate Trivy D
 ## Trivy vuln-list execution notes
 
 Use the raw advisory tree from `aquasecurity/vuln-list` as the first ingestion step.
+This is the default Trivy advisory path. If you need package ranges, fixed-version fidelity,
+or target-specific advisory coverage, start here before considering any other fallback.
 When writing to `core.db`, keep only records published in 2015 or later.
 
 Current command:
@@ -242,7 +244,8 @@ Operational notes:
 - The fetcher reads local checkout or unpacked archive content only.
 - All Trivy-shaped normalization stays in `sync/trivy_adapter.py`.
 - The fetcher updates `vulnerabilities` and the local cache, but it no longer appends `package_advisory` rows to `core.db`.
-- If package-level context is needed later, resolve it on demand from the local vuln-list mirror instead of persisting the full history.
+- If package-level context is needed later, resolve it on demand from the local vuln-list mirror instead of persisting the full history. This is the intended path, not a workaround.
+- Do not remove or ignore the local mirror if package-range fidelity matters; the mirror is the authoritative source for on-demand lookups.
 - The Trivy DB path stays reserved for vulnerability metadata enrichment and scanner-aligned CVSS/severity context.
 
 For a bounded validation ingest, add `--min-year 2024`.
@@ -251,8 +254,87 @@ Day 1 note:
 
 - `vuln-list` is still useful for package-range quality and test coverage, but the full package history does not need to live in `core.db`.
 - If the immediate goal is to join against existing asset inventories, the current Trivy JSON path and scanner-aligned sources are usually enough.
-- A `vuln-list` lookup can be done later, on demand, when package coverage or fixed-version fidelity becomes the limiting factor.
+- A `vuln-list` lookup can be done later, on demand, when package coverage or fixed-version fidelity becomes the limiting factor. Treat that lookup as the normal escalation path for Trivy package detail, not as an optional extra.
 - For now, the `osv` target inside `aquasecurity/vuln-list` is considered sufficient; we do not need a separate `OSV.dev` ingest until coverage or freshness gaps show up in analysis.
+
+On-demand lookup recipe:
+
+For the full repeatable single-CVE workflow, see [docs/DEEP_DIVE.md](DEEP_DIVE.md).
+
+1. Identify the `vuln_id` or package name you want to inspect.
+2. Confirm the local mirror has a hit:
+
+```bash
+rg -n --glob '*.json' 'CVE-2026-31431' data/aquasecurity-vuln-list-mirror/{alpine,debian,ubuntu,ghsa,glad,go,osv,seal}
+```
+
+3. Load the normalized advisory records through the adapter helper, not by parsing raw tree shape yourself:
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+from sync.trivy_adapter import load_advisories_for_vuln_id_from_directory
+
+source_dir = Path("data/aquasecurity-vuln-list-mirror")
+for advisory in load_advisories_for_vuln_id_from_directory(
+    source_dir,
+    "CVE-2026-31431",
+    "2026-06-18T00:00:00Z",
+    targets=["alpine", "debian", "ubuntu", "ghsa", "glad", "go", "osv", "seal"],
+):
+    print(advisory)
+PY
+```
+
+4. If the lookup is only for review, stop there. If you need to persist the advisory context, rerun `python3 -m sync.fetch_trivy_vuln_list --source-dir data/aquasecurity-vuln-list-mirror`.
+5. If the CVE looks noisy but important, check the other local sources in this order:
+
+   - `db/core.db` `signals` for `kev`, `exploit`, and `hot`
+   - `db/exploit.db` through `sync.exploit_adapter` for raw exploit/proof-of-concept context
+   - `hot` evidence via `python3 -m sync.fetch_hot --vuln-id <CVE-ID> --simple` when you want the attention signal refreshed for one ID
+
+6. Write down the exact `vuln_id`, `package_name`, `fixed_version`, and `signal_type` you used so the lookup can be repeated later without guesswork.
+
+Recommended deep-dive order for a single CVE:
+
+1. `core.db` entry exists?
+2. `signals` show `kev`, `exploit`, or `hot`?
+3. `aquasecurity/vuln-list` mirror has package or OSV context?
+4. `db/exploit.db` adds PoC / weaponized detail?
+5. `hot` adds current attention context?
+6. If needed, rerun the bounded ingest to persist the result.
+
+Copy-paste template:
+
+```bash
+VULN_ID='CVE-2026-31431'
+MIRROR_DIR='data/aquasecurity-vuln-list-mirror'
+
+rg -n --glob '*.json' "$VULN_ID" "$MIRROR_DIR"/{alpine,debian,ubuntu,ghsa,glad,go,osv,seal}
+
+python3 - <<'PY'
+from pathlib import Path
+from datetime import datetime, timezone
+from sync.trivy_adapter import load_advisories_for_vuln_id_from_directory
+
+vuln_id = 'CVE-2026-31431'
+source_dir = Path('data/aquasecurity-vuln-list-mirror')
+observed_at = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+targets = ['alpine', 'debian', 'ubuntu', 'ghsa', 'glad', 'go', 'osv', 'seal']
+
+for advisory in load_advisories_for_vuln_id_from_directory(source_dir, vuln_id, observed_at, targets=targets):
+    print(advisory.vuln_id, advisory.source, advisory.ecosystem, advisory.package_name, advisory.fixed_version)
+PY
+
+sqlite3 -header -column db/core.db "
+SELECT signal_type, provider, score, observed_at
+FROM signals
+WHERE vuln_id = '$VULN_ID'
+ORDER BY observed_at DESC, id DESC;
+"
+
+python3 -m sync.fetch_hot --vuln-id "$VULN_ID" --simple
+```
 
 -----
 
@@ -551,7 +633,7 @@ This is an example operational pattern, not a required configuration.
   - `./scripts/refresh_all_sources.sh`
   - `./scripts/ingest_recent_core_db.sh`
   - `uv run python -m sync.feed_quality`
-  - report generation
+  - short vuln list
 - Every 6 hours:
   - `uv run python -m sync.fetch_hot`
 - Every hour, if you want a faster KEV watch:
@@ -622,7 +704,7 @@ Manual review order after the ingest pass:
 
 1. Run `uv run python -m sync.fetch_hot` only after `core.db` has been refreshed.
 2. Inspect `uv run python -m sync.feed_quality` output for freshness and coverage.
-3. Use `uv run python -m app.skills hot --limit 20 --details` or SQL queries to review the current `hot` signal history.
-4. Use the Skills CLI or direct SQL for the final report view.
+3. Use `uv run python -m app.skills hot --limit 10 --details` or SQL queries for a short hot watchlist.
+4. Use the Skills CLI or direct SQL for a short vuln list when you do not need a full report.
 
-If you only need the newest operational KEV set, run `python3 -m sync.fetch_kev` directly. For the bounded 3-year validation corpus, prefer the wrapper script so the mirror refresh and quality check happen in the same pass. The mirror refresh step matters for the advisory feeds because `ingest_recent_core_db.sh` diffs against the last ingested mirror refs.
+If you only need the newest operational KEV set, run `uv run python -m sync.fetch_kev` directly. For the bounded 3-year validation corpus, prefer the wrapper script so the mirror refresh and quality check happen in the same pass. The mirror refresh step matters for the advisory feeds because `ingest_recent_core_db.sh` diffs against the last ingested mirror refs.

@@ -157,10 +157,24 @@ class ScoringTests(TestCase):
                 fresh_at = utc_now()
                 conn.execute(
                     """
+                    INSERT INTO assets (asset_id, hostname, os, version, owner, exposed, criticality)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    ("asset-9", "host-9", "linux", "1", "team-z", 1, "high"),
+                )
+                conn.execute(
+                    """
                     INSERT INTO vulnerabilities (vuln_id, source, title, summary, severity, cvss_score, cvss_source, published_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     ("CVE-2024-9999", "ghsa", "sample", "summary", "MEDIUM", 5.0, "GHSA", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z"),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO findings (asset_id, vuln_id, risk_score, scoring_version, status, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    ("asset-9", "CVE-2024-9999", None, "v1", "open", "2026-05-09T00:00:00+00:00"),
                 )
                 append_signal(
                     conn,
@@ -195,6 +209,8 @@ class ScoringTests(TestCase):
                 conn.commit()
 
                 found = skills.find_vuln("CVE-2024-9999", db_path=core_db)
+                affected_assets = skills.affected_assets("CVE-2024-9999", db_path=core_db)
+                asset_risk = skills.explain_asset_risk("host-9", db_path=core_db)
                 freshness = {row["feed"]: row for row in skills.data_freshness(db_path=core_db)}
             finally:
                 conn.close()
@@ -203,6 +219,13 @@ class ScoringTests(TestCase):
             self.assertTrue(found["has_exploit"])
             self.assertIn("exploit", found["signals"])
             self.assertEqual("go-exploitdb", found["signals"]["exploit"]["provider"])
+            self.assertEqual(1, len(affected_assets))
+            self.assertIn("finding", affected_assets[0])
+            self.assertIn("score_breakdown", affected_assets[0]["finding"])
+            self.assertIsNotNone(asset_risk)
+            self.assertEqual("host-9", asset_risk["asset"]["hostname"])
+            self.assertGreaterEqual(len(asset_risk["findings"]), 1)
+            self.assertIn("score_breakdown", asset_risk["findings"][0]["finding"])
             self.assertEqual("fresh", freshness["ghsa"]["staleness_status"])
             self.assertEqual("fresh", freshness["hot"]["staleness_status"])
             self.assertEqual("error", freshness["kev"]["last_fetch_status"])

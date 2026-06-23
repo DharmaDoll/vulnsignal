@@ -34,11 +34,15 @@ Recommended end-to-end flow for a local refresh and review:
 3. Ingest the latest feed window with `./scripts/ingest_recent_core_db.sh`.
 4. Refresh web intel with `uv run python -m sync.fetch_hot` after `core.db` is current.
 5. Inspect feed health with `uv run python -m sync.feed_quality`.
-6. Use the Skills CLI or SQL queries to review the latest lists and deltas.
+6. For a quick answer, use `uv run python -m app.skills hot --limit 10 --details` or a short SQL list.
 
-For one practical scheduling example, see the `Hot web intel` section in [docs/FEEDS.md](docs/FEEDS.md). It shows a model case with daily core refresh, 6-hour hot collection, and optional hourly KEV watching. Treat it as an example, not a hard requirement.
-For `hot` discovery keywords, see the suggested manual query terms in [docs/FEEDS.md](docs/FEEDS.md).
+For one practical scheduling example, see the `Hot web intel` section in [docs/FEEDS.md](docs/FEEDS.md). It shows a model case with daily core refresh, 6-hour hot collection, and a short hot watchlist. Treat it as an example, not a hard requirement.
+For `hot` discovery keywords and short-list review examples, see [docs/FEEDS.md](docs/FEEDS.md).
 `hot` should be run from a local shell with working outbound HTTP/DNS; restricted-network environments may return zero discoveries even when the code is healthy.
+For a routing preview before splitting work, use `uv run python -m app.skills route "..."`.
+For a bounded single-CVE worker, use `uv run python scripts/deep_dive.py CVE-2026-31431 --json`.
+For the thin CLI orchestrator, use `uv run python scripts/run_route.py "CVE-2026-31431 deep dive" --json`.
+For stable JSON examples for `deep_dive`, `watchlist`, and `feed_refresh`, see [docs/DEEP_DIVE.md](docs/DEEP_DIVE.md).
 
 If you only want the live KEV feed, run `uv run python -m sync.fetch_kev` directly. If you only want the live EPSS snapshot, run `uv run python -m sync.fetch_epss` directly. For a bounded validation corpus, prefer the wrapper script. It keeps the mirror refresh, KEV, EPSS, and recent advisory ingest window in one pass.
 
@@ -87,6 +91,9 @@ Trivy vuln-list execution path:
 1. Mirror `aquasecurity/vuln-list` locally with `git clone --depth 1 https://github.com/aquasecurity/vuln-list data/aquasecurity-vuln-list-mirror`.
 2. Refresh that mirror with `git -C data/aquasecurity-vuln-list-mirror pull --ff-only`.
 3. Ingest the local JSON tree with `python3 -m sync.fetch_trivy_vuln_list --source-dir data/aquasecurity-vuln-list-mirror`.
+4. Use the mirror as the normal source of truth when you need package ranges, fixed versions, or target-specific advisory detail; do not expect `core.db` alone to retain that full history.
+5. For a concrete lookup recipe, see [docs/DEEP_DIVE.md](docs/DEEP_DIVE.md). It points you to `core.db`, `vuln-list`, `db/exploit.db`, and `hot` in a repeatable order.
+6. For agent routing, keep the final watchlist or conclusion in the main agent and use sub-agents only for bounded evidence gathering.
 
 Vulnrichment execution path:
 
@@ -126,6 +133,7 @@ project/
 
 
 Trivy の主経路は advisory JSON と `aquasecurity/vuln-list` です。compiled DB は任意のバックフィル用途としてのみ残しています。
+package-range や fixed-version の確認が必要なときは、`aquasecurity/vuln-list` の local mirror を前提にしてください。`core.db` には full history を持たせません。
 取得手順とローカル cache の要件は [docs/FEEDS.md](docs/FEEDS.md) を参照してください。
 `core.db` が他の ingest でロックされている場合は、`VULNSIGNAL_DB_PATH=/tmp/vulnsignal-core.db` のように別 DB を指定して再現用 ingest を回せます。
 
@@ -137,3 +145,8 @@ uv run python -m sync.fetch_trivy_db --db-dir db/trivy_cache.db
 
 `db/trivy_cache.db` には `trivy.db` と `metadata.json` が必要です。
 `sync/fetch_trivy_db.py` は `vulnerability` を正規化して `enrichment` signals に落としますが、通常更新フローでは回しません。
+
+GitHub CLI の認証を平文で残したくない場合は、`scripts/gh_secret.py store` で Secret Service に token を入れてから `scripts/check_dependabot.sh` を使ってください。
+移行中だけ `ALLOW_PLAINTEXT_GH=1` を付けると既存の `gh auth` 保存値を読むフォールバックにできます。
+Dependency cooldown は install 時に `uv sync --frozen --dev --exclude-newer "$UV_EXCLUDE_NEWER"` でかけています。CI では直近 7 日より新しい package を弾きます。
+ローカルで dependency を更新するときも、`UV_EXCLUDE_NEWER="$(date -u -d '7 days ago' +%F)"` を付けてから `uv sync` / `uv lock` を実行してください。

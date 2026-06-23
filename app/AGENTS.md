@@ -5,7 +5,7 @@ You are working inside the decision and API layer.
 ## Responsibilities of this directory
 
 - Implement risk scoring (`scoring.py`)
-- Expose Skills API via FastAPI (`api.py`, `skills.py`)
+- Expose Skills API surfaces (`skills.py`; optional FastAPI wrapper when enabled)
 - Run scheduled jobs (`scheduler.py`)
 
 ## Rules specific to this layer

@@ -24,6 +24,23 @@ Produce a report that answers:
 - What gaps limit confidence?
 - What should be prioritized first if assets exist?
 
+If the user asks to deep-dive a single CVE or a small set of CVEs, use the
+lookup recipe in `docs/FEEDS.md`:
+
+1. confirm the `core.db` row
+2. inspect `signals` for `kev`, `exploit`, and `hot`
+3. resolve package context from the local `aquasecurity/vuln-list` mirror
+4. check `db/exploit.db` through `sync.exploit_adapter` when exploit detail matters
+5. refresh `hot` only when the current attention signal is part of the ask
+
+Keep the result reproducible by naming the exact `vuln_id`, `package_name`,
+and `signal_type` used in the lookup.
+
+If the user only wants "needed vulnerabilities" or a quick list, do not try to
+answer all of the above. Return the shortest list that is still actionable.
+If the request is ambiguous, prefer the shortest actionable list over a full
+analysis.
+
 ## Required workflow
 
 1. Run `db/migrate.py`.
@@ -58,6 +75,12 @@ Include these sections in the report:
 7. Operational implications
 8. Caveats
 
+If the request is list-only, collapse the report to:
+
+1. Scope and cutoff
+2. Needed vulnerabilities only
+3. Caveats
+
 ## Insight rules
 
 - Treat `enrichment + epss` as baseline context, `package_advisory` as remediation context, and `exploit` / `kev` as escalation signals.
@@ -91,6 +114,14 @@ Write a concise report with short bullets and concrete numbers. Prefer:
 - a few representative vuln_ids
 - one-line interpretation after each metric block
 - include both `published_at` and `first_seen_at` for representative and ranked vulnerability examples
+
+For list-only requests:
+
+- return at most 10-20 rows
+- keep columns to `vuln_id`, `title`, `source`, `published_at`,
+  `first_seen_at`, `CVSS`, `EPSS`, `signals`, and one short reason
+- skip the concentration and matrix sections unless the user explicitly asks for them
+- prefer exploit/kev/hot/high-EPSS rows when "important" is implied
 
 Do not write generic prose without supporting numbers.
 

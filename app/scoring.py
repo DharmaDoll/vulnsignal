@@ -39,6 +39,7 @@ class ScoredFinding:
     hostname: str
     vuln_id: str
     risk_score: int
+    raw_score: float
     cvss_score: float
     epss_score: float
     kev_present: bool
@@ -46,6 +47,7 @@ class ScoredFinding:
     vex_suppressed: bool
     criticality_bonus: int
     exposure_bonus: int
+    score_breakdown: dict[str, Any]
     scoring_version: str = SCORING_VERSION
 
     def to_dict(self) -> dict[str, Any]:
@@ -54,6 +56,7 @@ class ScoredFinding:
             "hostname": self.hostname,
             "vuln_id": self.vuln_id,
             "risk_score": self.risk_score,
+            "raw_score": self.raw_score,
             "cvss_score": self.cvss_score,
             "epss_score": self.epss_score,
             "kev_present": self.kev_present,
@@ -61,6 +64,7 @@ class ScoredFinding:
             "vex_suppressed": self.vex_suppressed,
             "criticality_bonus": self.criticality_bonus,
             "exposure_bonus": self.exposure_bonus,
+            "score_breakdown": self.score_breakdown,
             "scoring_version": self.scoring_version,
         }
 
@@ -135,6 +139,46 @@ def _epss_score(conn: sqlite3.Connection, vuln_id: str) -> float:
     return float(row["epss"]) if row and row["epss"] is not None else 0.0
 
 
+def _score_components(
+    cvss_score: float,
+    epss_score: float,
+    kev_present: bool,
+    exploit_present: bool,
+    exposure_bonus: int,
+    criticality_bonus: int,
+    vex_suppressed: bool,
+) -> tuple[float, int, dict[str, Any]]:
+    cvss_component = cvss_score * 4.0
+    epss_component = epss_score * 20.0
+    kev_bonus = 15 if kev_present else 0
+    exploit_bonus = 10 if exploit_present else 0
+    vex_suppression = 40 if vex_suppressed else 0
+    raw_score = (
+        cvss_component
+        + epss_component
+        + kev_bonus
+        + exploit_bonus
+        + exposure_bonus
+        + criticality_bonus
+        - vex_suppression
+    )
+    risk_score = min(100, round(raw_score))
+    breakdown = {
+        "components": {
+            "cvss_component": cvss_component,
+            "epss_component": epss_component,
+            "kev_bonus": kev_bonus,
+            "exploit_bonus": exploit_bonus,
+            "exposure_bonus": exposure_bonus,
+            "criticality_bonus": criticality_bonus,
+            "vex_suppression": vex_suppression,
+        },
+        "raw_score": raw_score,
+        "risk_score": risk_score,
+    }
+    return raw_score, risk_score, breakdown
+
+
 def score_vulnerability(
     conn: sqlite3.Connection,
     vuln_row: sqlite3.Row,
@@ -149,22 +193,21 @@ def score_vulnerability(
     vex_suppressed = _vex_suppressed(latest)
     exposure_bonus = 10 if asset_row is not None and int(asset_row["exposed"] or 0) == 1 else 0
     criticality_bonus = _criticality_bonus(asset_row["criticality"] if asset_row is not None else None)
-
-    raw_score = (
-        cvss_score * 4.0
-        + epss_score * 20.0
-        + (15 if kev_present else 0)
-        + (10 if exploit_present else 0)
-        + exposure_bonus
-        + criticality_bonus
-        - (40 if vex_suppressed else 0)
+    raw_score, risk_score, breakdown = _score_components(
+        cvss_score=cvss_score,
+        epss_score=epss_score,
+        kev_present=kev_present,
+        exploit_present=exploit_present,
+        exposure_bonus=exposure_bonus,
+        criticality_bonus=criticality_bonus,
+        vex_suppressed=vex_suppressed,
     )
-    risk_score = min(100, round(raw_score))
     return ScoredFinding(
         asset_id=asset_row["asset_id"] if asset_row is not None else "",
         hostname=asset_row["hostname"] if asset_row is not None else "",
         vuln_id=vuln_id,
         risk_score=risk_score,
+        raw_score=raw_score,
         cvss_score=cvss_score,
         epss_score=epss_score,
         kev_present=kev_present,
@@ -172,6 +215,7 @@ def score_vulnerability(
         vex_suppressed=vex_suppressed,
         criticality_bonus=criticality_bonus,
         exposure_bonus=exposure_bonus,
+        score_breakdown=breakdown,
     )
 
 
@@ -205,7 +249,7 @@ def iter_ranked_findings(
     return scored
 
 
-def top_risks(conn: sqlite3.Connection, limit: int | None = 10) -> list[dict[str, Any]]:
+def top_risks(conn: sqlite3.Connection, limit: int | None = 20) -> list[dict[str, Any]]:
     ranked = iter_ranked_findings(conn)
     if limit is not None:
         ranked = ranked[:limit]
@@ -349,6 +393,167 @@ def find_vuln(conn: sqlite3.Connection, vuln_id: str) -> dict[str, Any] | None:
         "affected_assets": [dict(row) for row in asset_rows],
         "has_exploit": "exploit" in latest,
         "vex_suppressed": _vex_suppressed(latest),
+    }
+
+
+def affected_assets(conn: sqlite3.Connection, vuln_id: str) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT
+          f.id AS finding_id,
+          f.asset_id,
+          a.hostname,
+          a.os,
+          a.version,
+          a.owner,
+          a.exposed,
+          a.criticality,
+          f.vuln_id,
+          f.risk_score AS stored_risk_score,
+          f.scoring_version AS finding_scoring_version,
+          f.status AS finding_status,
+          f.updated_at AS finding_updated_at,
+          v.source,
+          v.title,
+          v.summary,
+          v.severity,
+          v.cvss_score,
+          v.cvss_source,
+          v.published_at,
+          v.first_seen_at,
+          v.updated_at AS vuln_updated_at
+        FROM findings f
+        JOIN assets a ON a.asset_id = f.asset_id
+        JOIN vulnerabilities v ON v.vuln_id = f.vuln_id
+        WHERE f.vuln_id = ? AND COALESCE(f.status, 'open') != 'suppressed'
+        ORDER BY COALESCE(f.risk_score, 0) DESC, a.hostname, a.asset_id
+        """,
+        (vuln_id,),
+    ).fetchall()
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        finding = score_vulnerability(conn, row, row)
+        items.append(
+            {
+                "finding_id": row["finding_id"],
+                "finding_status": row["finding_status"],
+                "finding_updated_at": row["finding_updated_at"],
+                "stored_risk_score": row["stored_risk_score"],
+                "scoring_version": row["finding_scoring_version"] or finding.scoring_version,
+                "asset": {
+                    "asset_id": row["asset_id"],
+                    "hostname": row["hostname"],
+                    "os": row["os"],
+                    "version": row["version"],
+                    "owner": row["owner"],
+                    "exposed": row["exposed"],
+                    "criticality": row["criticality"],
+                },
+                "vulnerability": {
+                    "vuln_id": row["vuln_id"],
+                    "source": row["source"],
+                    "title": row["title"],
+                    "summary": row["summary"],
+                    "severity": row["severity"],
+                    "cvss_score": row["cvss_score"],
+                    "cvss_source": row["cvss_source"],
+                    "published_at": row["published_at"],
+                    "first_seen_at": row["first_seen_at"],
+                    "updated_at": row["vuln_updated_at"],
+                },
+                "finding": finding.to_dict(),
+            }
+        )
+    return items
+
+
+def explain_asset_risk(conn: sqlite3.Connection, hostname: str) -> dict[str, Any] | None:
+    asset_row = conn.execute(
+        """
+        SELECT asset_id, hostname, os, version, owner, exposed, criticality
+        FROM assets
+        WHERE hostname = ?
+        ORDER BY asset_id
+        LIMIT 1
+        """,
+        (hostname,),
+    ).fetchone()
+    if asset_row is None:
+        return None
+
+    rows = conn.execute(
+        """
+        SELECT
+          f.id AS finding_id,
+          f.asset_id,
+          a.hostname,
+          a.os,
+          a.version,
+          a.owner,
+          a.exposed,
+          a.criticality,
+          f.vuln_id,
+          f.risk_score AS stored_risk_score,
+          f.scoring_version AS finding_scoring_version,
+          f.status AS finding_status,
+          f.updated_at AS finding_updated_at,
+          v.source,
+          v.title,
+          v.summary,
+          v.severity,
+          v.cvss_score,
+          v.cvss_source,
+          v.published_at,
+          v.first_seen_at,
+          v.updated_at AS vuln_updated_at
+        FROM findings f
+        JOIN assets a ON a.asset_id = f.asset_id
+        JOIN vulnerabilities v ON v.vuln_id = f.vuln_id
+        WHERE a.hostname = ? AND COALESCE(f.status, 'open') != 'suppressed'
+        ORDER BY COALESCE(f.risk_score, 0) DESC, v.cvss_score DESC, f.vuln_id
+        """,
+        (hostname,),
+    ).fetchall()
+
+    findings: list[dict[str, Any]] = []
+    for row in rows:
+        finding = score_vulnerability(conn, row, row)
+        findings.append(
+            {
+                "finding_id": row["finding_id"],
+                "finding_status": row["finding_status"],
+                "finding_updated_at": row["finding_updated_at"],
+                "stored_risk_score": row["stored_risk_score"],
+                "scoring_version": row["finding_scoring_version"] or finding.scoring_version,
+                "vulnerability": {
+                    "vuln_id": row["vuln_id"],
+                    "source": row["source"],
+                    "title": row["title"],
+                    "summary": row["summary"],
+                    "severity": row["severity"],
+                    "cvss_score": row["cvss_score"],
+                    "cvss_source": row["cvss_source"],
+                    "published_at": row["published_at"],
+                    "first_seen_at": row["first_seen_at"],
+                    "updated_at": row["vuln_updated_at"],
+                },
+                "finding": finding.to_dict(),
+            }
+        )
+
+    findings.sort(
+        key=lambda item: (
+            -item["finding"]["risk_score"],
+            -int(item["finding"]["kev_present"]),
+            -int(item["finding"]["exploit_present"]),
+            item["vulnerability"]["vuln_id"],
+        )
+    )
+
+    return {
+        "asset": dict(asset_row),
+        "scoring_version": SCORING_VERSION,
+        "findings": findings,
     }
 
 

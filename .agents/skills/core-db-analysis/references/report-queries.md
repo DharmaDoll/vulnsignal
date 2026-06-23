@@ -171,6 +171,116 @@ ORDER BY score DESC, f.kev_present DESC, f.cvss_score DESC, COALESCE(e.epss, 0) 
 LIMIT 20;
 ```
 
+## 11. Daily latest-30 watchlist
+
+Use this when the user asks for "today", "latest", or "注目すべきものを30件".
+Set `:cutoff` to the start of the local report day as an explicit ISO timestamp.
+
+```sql
+WITH recent AS (
+  SELECT vuln_id, source, title, severity, cvss_score, published_at, first_seen_at
+  FROM vulnerabilities
+  WHERE first_seen_at >= :cutoff
+    AND lower(coalesce(title, '') || ' ' || coalesce(summary, '')) NOT LIKE '%cisco%'
+    AND lower(coalesce(title, '') || ' ' || coalesce(summary, '')) NOT LIKE '%palo alto%'
+    AND lower(coalesce(title, '') || ' ' || coalesce(summary, '')) NOT LIKE '%fortinet%'
+    AND lower(coalesce(title, '') || ' ' || coalesce(summary, '')) NOT LIKE '%juniper%'
+    AND lower(coalesce(title, '') || ' ' || coalesce(summary, '')) NOT LIKE '%f5%'
+),
+flags AS (
+  SELECT r.vuln_id,
+         max(CASE WHEN s.signal_type = 'kev' THEN 1 ELSE 0 END) AS kev_present,
+         max(CASE WHEN s.signal_type = 'exploit' THEN 1 ELSE 0 END) AS exploit_present,
+         max(CASE WHEN s.signal_type = 'hot' THEN 1 ELSE 0 END) AS hot_present
+  FROM recent r
+  LEFT JOIN signals s ON s.vuln_id = r.vuln_id
+  GROUP BY r.vuln_id
+)
+SELECT r.vuln_id,
+       r.title,
+       r.source,
+       r.published_at,
+       r.first_seen_at,
+       r.cvss_score,
+       COALESCE(e.epss, 'missing') AS epss,
+       CASE
+         WHEN f.kev_present = 1 THEN 'kev'
+         WHEN f.exploit_present = 1 THEN 'exploit'
+         WHEN f.hot_present = 1 THEN 'hot'
+         ELSE 'recent'
+       END AS signals,
+       CASE
+         WHEN f.kev_present = 1 THEN 'KEV'
+         WHEN f.exploit_present = 1 THEN 'exploit'
+         WHEN f.hot_present = 1 THEN 'hot'
+         ELSE 'recent'
+       END AS reason
+FROM recent r
+LEFT JOIN flags f ON f.vuln_id = r.vuln_id
+LEFT JOIN epss_current e ON e.vuln_id = r.vuln_id
+ORDER BY r.first_seen_at DESC, r.vuln_id DESC
+LIMIT 30;
+```
+
+## 12. Pinpoint watchlist
+
+Use this for "注目の脆弱性" when the user wants fewer false positives than a
+plain latest list. Set `:cutoff` explicitly, usually to the start of the local
+day or the last 7 days.
+
+```sql
+WITH recent AS (
+  SELECT vuln_id, source, title, severity, cvss_score, published_at, first_seen_at
+  FROM vulnerabilities
+  WHERE first_seen_at >= :cutoff
+    AND lower(coalesce(title, '') || ' ' || coalesce(summary, '')) NOT LIKE '%cisco%'
+    AND lower(coalesce(title, '') || ' ' || coalesce(summary, '')) NOT LIKE '%palo alto%'
+    AND lower(coalesce(title, '') || ' ' || coalesce(summary, '')) NOT LIKE '%fortinet%'
+    AND lower(coalesce(title, '') || ' ' || coalesce(summary, '')) NOT LIKE '%juniper%'
+    AND lower(coalesce(title, '') || ' ' || coalesce(summary, '')) NOT LIKE '%f5%'
+),
+flags AS (
+  SELECT r.vuln_id,
+         max(CASE WHEN s.signal_type = 'kev' THEN 1 ELSE 0 END) AS kev_present,
+         max(CASE WHEN s.signal_type = 'exploit' THEN 1 ELSE 0 END) AS exploit_present,
+         max(CASE WHEN s.signal_type = 'hot' THEN 1 ELSE 0 END) AS hot_present
+  FROM recent r
+  LEFT JOIN signals s ON s.vuln_id = r.vuln_id
+  GROUP BY r.vuln_id
+)
+SELECT r.vuln_id,
+       r.title,
+       r.source,
+       r.published_at,
+       r.first_seen_at,
+       r.cvss_score,
+       COALESCE(e.epss, 'missing') AS epss,
+       CASE
+         WHEN f.kev_present = 1 THEN 'kev'
+         WHEN f.exploit_present = 1 THEN 'exploit'
+         WHEN f.hot_present = 1 THEN 'hot'
+         WHEN COALESCE(r.cvss_score, 0) >= 9.0 THEN 'high_cvss'
+         WHEN COALESCE(e.epss, 0) >= 0.05 THEN 'high_epss'
+       END AS reason
+FROM recent r
+LEFT JOIN flags f ON f.vuln_id = r.vuln_id
+LEFT JOIN epss_current e ON e.vuln_id = r.vuln_id
+WHERE f.kev_present = 1
+   OR f.exploit_present = 1
+   OR f.hot_present = 1
+   OR COALESCE(r.cvss_score, 0) >= 9.0
+   OR COALESCE(e.epss, 0) >= 0.05
+ORDER BY
+  (CASE WHEN f.kev_present = 1 THEN 15 ELSE 0 END +
+   CASE WHEN f.exploit_present = 1 THEN 10 ELSE 0 END +
+   CASE WHEN f.hot_present = 1 THEN 12 ELSE 0 END +
+   COALESCE(r.cvss_score, 0) * 4.0 +
+   COALESCE(e.epss, 0) * 20.0) DESC,
+  r.first_seen_at DESC,
+  r.vuln_id DESC
+LIMIT 30;
+```
+
 ## Checklist
 
 - Convert the user request into an explicit cutoff date.
