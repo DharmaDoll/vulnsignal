@@ -39,6 +39,104 @@ Recommended split:
   - `vuln-list` mirror search
   - docs and skill consistency checks
 
+Preview the split before you work:
+
+```bash
+uv run python -m app.skills route "Here is the request you want to inspect"
+```
+
+CLI-only orchestration pattern:
+
+```bash
+REQUEST='CVE-2026-31431 deep dive'
+
+uv run python -m app.skills route "$REQUEST" --json > /tmp/vulnsignal-route.json
+cat /tmp/vulnsignal-route.json
+
+# main agent reads the route JSON and then launches bounded workers.
+# Example worker action:
+uv run python scripts/deep_dive.py CVE-2026-31431 --json
+
+# Thin wrapper that does both:
+uv run python scripts/run_route.py "$REQUEST" --json
+```
+
+Worker contract for this repo:
+
+- `route` always decides the split, but it does not execute workers.
+- `main` owns the final answer and any synthesis.
+- each worker should return one bounded artifact:
+  - one CVE
+  - one watchlist
+  - one hot refresh
+  - one exploit lookup
+- the main agent can combine those artifacts without exposing sub-agent internals.
+
+The wrapper JSON is stable and should contain:
+
+- `request`
+- `generated_at`
+- `route`
+- `execution`
+- `artifact`
+- `result`
+
+Example shapes:
+
+- `deep_dive`
+  - `artifact.kind = "deep_dive"`
+  - `artifact.data.core`
+  - `artifact.data.trivy_vuln_list`
+  - `artifact.data.go_exploitdb`
+  - `artifact.data.hot`
+- `watchlist`
+  - `artifact.kind = "watchlist"`
+  - `artifact.data.top_risks`
+  - `artifact.data.hot` when the request asked for hot attention
+- `feed_refresh`
+  - `artifact.kind = "freshness"`
+  - `artifact.data` is the feed freshness array from `fetch_log`
+
+Minimal JSON sketches:
+
+```json
+{
+  "request": "ここ三日間の注目の脆弱性を30件",
+  "generated_at": "2026-06-18T08:14:02Z",
+  "route": { "mode": "watchlist" },
+  "execution": { "status": "ok", "worker_count": 1 },
+  "artifact": {
+    "kind": "watchlist",
+    "summary": "Ranked watchlist bundle",
+    "worker": "app.skills",
+    "data": {
+      "top_risks": [],
+      "hot": []
+    }
+  },
+  "result": {
+    "top_risks": [],
+    "hot": []
+  }
+}
+```
+
+```json
+{
+  "request": "feed freshness",
+  "generated_at": "2026-06-18T08:14:02Z",
+  "route": { "mode": "feed_refresh" },
+  "execution": { "status": "ok", "worker_count": 1 },
+  "artifact": {
+    "kind": "freshness",
+    "summary": "Feed freshness bundle",
+    "worker": "app.skills",
+    "data": []
+  },
+  "result": []
+}
+```
+
 Do not split:
 
 - policy changes
