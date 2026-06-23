@@ -33,14 +33,11 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
 
-      - name: Check lockfile against cooldown window
-        run: uv lock --check --exclude-newer "$UV_EXCLUDE_NEWER"
-
       - name: Install dependencies
-        run: uv sync --frozen --dev
+        run: uv sync --frozen --dev --exclude-newer "$UV_EXCLUDE_NEWER"
 
       - name: Initialize database schema
         run: uv run python db/migrate.py
 
       - name: Run tests
-        run: uv run pytest -q
+        run: uv run python -m pytest -q

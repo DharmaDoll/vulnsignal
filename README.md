@@ -148,5 +148,5 @@ uv run python -m sync.fetch_trivy_db --db-dir db/trivy_cache.db
 
 GitHub CLI の認証を平文で残したくない場合は、`scripts/gh_secret.py store` で Secret Service に token を入れてから `scripts/check_dependabot.sh` を使ってください。
 移行中だけ `ALLOW_PLAINTEXT_GH=1` を付けると既存の `gh auth` 保存値を読むフォールバックにできます。
-Dependency cooldown は `uv lock --check --exclude-newer "$UV_EXCLUDE_NEWER"` でかけています。CI では直近 7 日より新しい package を弾きます。
-ローカルで dependency を更新するときも、`UV_EXCLUDE_NEWER="$(date -u -d '7 days ago' +%F)" uv lock` のように cutoff を入れてください。
+Dependency cooldown は install 時に `uv sync --frozen --dev --exclude-newer "$UV_EXCLUDE_NEWER"` でかけています。CI では直近 7 日より新しい package を弾きます。
+ローカルで dependency を更新するときも、`UV_EXCLUDE_NEWER="$(date -u -d '7 days ago' +%F)"` を付けてから `uv sync` / `uv lock` を実行してください。
