@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from app.routing import plan_request
 from sync.common import DB_PATH, connect
 
 from app import scoring
@@ -234,6 +235,37 @@ def main() -> None:
     hot_parser.add_argument("--profile", choices=("strict", "balanced", "broad"), help="Shortcut for hot search settings when evaluating vuln_ids.")
     hot_parser.add_argument("--query-term", action="append", default=[], help="Optional extra discovery term to widen hot coverage when evaluating vuln_ids.")
     hot_parser.add_argument("--simple", action="store_true", help="Evaluate vuln_ids with RSS-only discovery mode.")
+    vuln_parser = subparsers.add_parser("vuln", help="Show one vulnerability from core.db.")
+    vuln_parser.add_argument("vuln_id")
+    vuln_parser.add_argument("--json", action="store_true")
+
+    risks_parser = subparsers.add_parser("risks", help="Show the top risk-ranked findings.")
+    risks_parser.add_argument("--limit", type=int, default=20)
+    risks_parser.add_argument("--json", action="store_true")
+
+    patch_parser = subparsers.add_parser("patch-queue", help="Show the patch queue.")
+    patch_parser.add_argument("--limit", type=int, default=20)
+    patch_parser.add_argument("--json", action="store_true")
+
+    has_exploit_parser = subparsers.add_parser("has-exploit", help="Check whether a vuln has exploit evidence.")
+    has_exploit_parser.add_argument("vuln_id")
+    has_exploit_parser.add_argument("--json", action="store_true")
+
+    assets_parser = subparsers.add_parser("assets", help="Show affected assets for one vulnerability.")
+    assets_parser.add_argument("vuln_id")
+    assets_parser.add_argument("--json", action="store_true")
+
+    asset_risk_parser = subparsers.add_parser("asset-risk", help="Explain risk for one asset hostname.")
+    asset_risk_parser.add_argument("hostname")
+    asset_risk_parser.add_argument("--json", action="store_true")
+
+    freshness_parser = subparsers.add_parser("freshness", help="Show feed freshness from fetch_log.")
+    freshness_parser.add_argument("--json", action="store_true")
+
+    route_parser = subparsers.add_parser("route", help="Plan main/sub-agent routing for a request.")
+    route_parser.add_argument("request", help="Free-form request to route.")
+    route_parser.add_argument("--json", action="store_true")
+
     vuln_parser = subparsers.add_parser("vuln", help="Show one vulnerability from core.db.")
     vuln_parser.add_argument("vuln_id")
     vuln_parser.add_argument("--json", action="store_true")
