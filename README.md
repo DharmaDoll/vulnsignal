@@ -39,8 +39,15 @@ Recommended end-to-end flow for a local refresh and review:
 For one practical scheduling example, see the `Hot web intel` section in [docs/FEEDS.md](docs/FEEDS.md). It shows a model case with daily core refresh, 6-hour hot collection, and a short hot watchlist. Treat it as an example, not a hard requirement.
 For `hot` discovery keywords and short-list review examples, see [docs/FEEDS.md](docs/FEEDS.md).
 `hot` should be run from a local shell with working outbound HTTP/DNS; restricted-network environments may return zero discoveries even when the code is healthy.
+<<<<<<< HEAD
 For a bounded single-CVE worker, use `uv run python scripts/deep_dive.py CVE-2026-31431 --json`.
 For the bounded single-CVE worker contract, see [docs/DEEP_DIVE.md](docs/DEEP_DIVE.md).
+=======
+For a routing preview before splitting work, use `uv run python -m app.skills route "..."`.
+For a bounded single-CVE worker, use `uv run python scripts/deep_dive.py CVE-2026-31431 --json`.
+For the thin CLI orchestrator, use `uv run python scripts/run_route.py "CVE-2026-31431 deep dive" --json`.
+For stable JSON examples for `deep_dive`, `watchlist`, and `feed_refresh`, see [docs/DEEP_DIVE.md](docs/DEEP_DIVE.md).
+>>>>>>> 1feaee4 (Harden CI and add uv cooldown)
 
 If you only want the live KEV feed, run `uv run python -m sync.fetch_kev` directly. If you only want the live EPSS snapshot, run `uv run python -m sync.fetch_epss` directly. For a bounded validation corpus, prefer the wrapper script. It keeps the mirror refresh, KEV, EPSS, and recent advisory ingest window in one pass.
 
