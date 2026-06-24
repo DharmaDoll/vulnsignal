@@ -21,10 +21,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Compute uv cooldown cutoff
-        shell: bash
-        run: echo "UV_EXCLUDE_NEWER=$(date -u -d '7 days ago' +%F)" >> "$GITHUB_ENV"
-
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
@@ -34,7 +30,7 @@ jobs:
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
 
       - name: Install dependencies
-        run: uv sync --frozen --dev --exclude-newer "$UV_EXCLUDE_NEWER"
+        run: uv sync --frozen --dev
 
       - name: Initialize database schema
         run: uv run python db/migrate.py
