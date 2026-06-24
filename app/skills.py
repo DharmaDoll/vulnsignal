@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from app.routing import plan_request
 from sync.common import DB_PATH, connect
 
 from app import scoring
@@ -236,10 +235,6 @@ def main() -> None:
     hot_parser.add_argument("--query-term", action="append", default=[], help="Optional extra discovery term to widen hot coverage when evaluating vuln_ids.")
     hot_parser.add_argument("--simple", action="store_true", help="Evaluate vuln_ids with RSS-only discovery mode.")
 
-    route_parser = subparsers.add_parser("route", help="Plan main/sub-agent routing for a request.")
-    route_parser.add_argument("request", help="Free-form request to route.")
-    route_parser.add_argument("--json", action="store_true")
-
     vuln_parser = subparsers.add_parser("vuln", help="Show one vulnerability from core.db.")
     vuln_parser.add_argument("vuln_id")
     vuln_parser.add_argument("--json", action="store_true")
@@ -282,27 +277,6 @@ def main() -> None:
             print(json.dumps(rows, indent=2, sort_keys=True))
         else:
             _print_hot_rows(rows, details=args.details)
-    elif args.command == "route":
-        plan = plan_request(args.request)
-        if args.json:
-            print(json.dumps(plan.to_dict(), indent=2, sort_keys=True))
-        else:
-            print(f"mode: {plan.mode}")
-            print(f"primary_agent: {plan.primary_agent}")
-            print(f"confidence: {plan.confidence}")
-            print(f"summary: {plan.summary}")
-            if plan.sub_agents:
-                print("sub_agents:")
-                for step in plan.sub_agents:
-                    print(f"  - role: {step.role}")
-                    print(f"    task: {step.task}")
-                    print(f"    reason: {step.reason}")
-                    if step.inputs:
-                        print(f"    inputs: {', '.join(step.inputs)}")
-                    if step.commands:
-                        print("    commands:")
-                        for command in step.commands:
-                            print(f"      - {command}")
     elif args.command == "vuln":
         row = find_vuln(args.vuln_id)
         if args.json:
