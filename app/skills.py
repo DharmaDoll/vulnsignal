@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from app.routing import plan_request
 from sync.common import DB_PATH, connect
 
 from app import scoring
@@ -261,10 +260,6 @@ def main() -> None:
 
     freshness_parser = subparsers.add_parser("freshness", help="Show feed freshness from fetch_log.")
     freshness_parser.add_argument("--json", action="store_true")
-
-    route_parser = subparsers.add_parser("route", help="Plan main/sub-agent routing for a request.")
-    route_parser.add_argument("request", help="Free-form request to route.")
-    route_parser.add_argument("--json", action="store_true")
 
     vuln_parser = subparsers.add_parser("vuln", help="Show one vulnerability from core.db.")
     vuln_parser.add_argument("vuln_id")

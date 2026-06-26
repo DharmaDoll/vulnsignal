@@ -5,7 +5,7 @@ You are working inside the decision and API layer.
 ## Responsibilities of this directory
 
 - Implement risk scoring (`scoring.py`)
-- Expose Skills API surfaces (`skills.py`; optional FastAPI wrapper when enabled)
+- Expose Skills CLI surfaces (`skills.py`)
 - Run scheduled jobs (`scheduler.py`)
 
 ## Rules specific to this layer
@@ -14,7 +14,7 @@ You are working inside the decision and API layer.
 - Read signals from `db/core.db` — do not re-fetch from external sources
 - All scoring must use the v1 formula defined in `docs/SCORING.md` — no ad-hoc weights
 - Store `scoring_version = "v1"` on every decision record written
-- Skills API responses must include `data_freshness` metadata so callers can detect stale data
+- `data_freshness()` must read from `fetch_log` table, not from system clock estimates
 
 ## Scoring implementation reference
 

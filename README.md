@@ -19,6 +19,10 @@ Python execution:
 - If you have `uv` installed, prefer `uv run python -m ...` for repo commands.
 - The repository now carries a minimal `pyproject.toml` and `uv.lock` so `uv` can manage the Python runtime and future lockfile.
 
+Branch hygiene:
+
+- Before creating a new branch, rebase the current worktree onto `origin/main` so the branch starts from the latest mainline state.
+
 Quick local refresh:
 
 ```bash
