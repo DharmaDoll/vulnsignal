@@ -48,7 +48,25 @@ def _collection() -> secretstorage.Collection:
     connection = _connection()
     collection = secretstorage.get_default_collection(connection)
     if collection.is_locked():
-        raise RuntimeError("Secret Service collection is locked; unlock it first and retry.")
+        password = os.environ.get("GH_KEYRING_PASSWORD")
+        if password:
+            subprocess.run(
+                [
+                    "gnome-keyring-daemon",
+                    "--unlock",
+                    "--components=secrets",
+                    "--daemonize",
+                    "--control-directory",
+                    DEFAULT_CONTROL_DIR,
+                ],
+                input=f"{password}\n".encode("utf-8"),
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            collection = secretstorage.get_default_collection(connection)
+        if collection.is_locked():
+            raise RuntimeError("Secret Service collection is locked; unlock it first and retry.")
     return collection
 
 
