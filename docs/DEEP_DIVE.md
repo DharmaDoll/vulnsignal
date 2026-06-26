@@ -96,13 +96,7 @@ Keep the note keyed by:
 
 ## Reproducibility checklist
 
-When you finish the lookup, keep these fields in the note:
-
-- `vuln_id`
-- `package_name`
-- `fixed_version`
-- `signal_type`
-- the local file path you used
+When you finish the lookup, keep the same fields listed above.
 
 If the item is worth keeping, rerun the bounded ingest after the deep dive so
 the platform state stays consistent with the investigation.

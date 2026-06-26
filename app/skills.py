@@ -234,7 +234,6 @@ def main() -> None:
     hot_parser.add_argument("--profile", choices=("strict", "balanced", "broad"), help="Shortcut for hot search settings when evaluating vuln_ids.")
     hot_parser.add_argument("--query-term", action="append", default=[], help="Optional extra discovery term to widen hot coverage when evaluating vuln_ids.")
     hot_parser.add_argument("--simple", action="store_true", help="Evaluate vuln_ids with RSS-only discovery mode.")
-
     vuln_parser = subparsers.add_parser("vuln", help="Show one vulnerability from core.db.")
     vuln_parser.add_argument("vuln_id")
     vuln_parser.add_argument("--json", action="store_true")
