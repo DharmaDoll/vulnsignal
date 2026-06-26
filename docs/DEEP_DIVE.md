@@ -82,12 +82,18 @@ python3 -m sync.fetch_hot --vuln-id "$VULN_ID" --simple
 
 ## Worker contract
 
-`scripts/deep_dive.py <CVE-ID> --json` returns a bounded bundle with `core`,
-`trivy_vuln_list`, `go_exploitdb`, and `hot`. Use `--refresh-hot` only when you
-need to refresh the local attention signal first.
+`scripts/deep_dive.py <CVE-ID> --json` emits a versioned JSON object with:
 
-## Reproducibility checklist
+- `schema_version`: `1`
+- `kind`: `deep_dive`
+- `vuln_id`
+- `generated_at`
+- `sources`
+- `core`
+- `trivy_vuln_list`
+- `go_exploitdb`
+- `hot`
+- `hot_refresh`
 
-When you finish the lookup, keep the same fields listed above. If the item is
-worth keeping, rerun the bounded ingest after the deep dive so the platform
-state stays consistent with the investigation.
+Keep those fields stable. When the lookup is worth keeping, rerun the bounded
+ingest so the platform state stays consistent with the investigation.

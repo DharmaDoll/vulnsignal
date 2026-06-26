@@ -122,10 +122,6 @@ def data_freshness(db_path: Path | None = None) -> list[dict[str, Any]]:
         conn.close()
 
 
-def route_request(request: str) -> dict[str, Any]:
-    return plan_request(request).to_dict()
-
-
 def record_report_history(
     vuln_ids: list[str],
     report_key: str | None = None,
