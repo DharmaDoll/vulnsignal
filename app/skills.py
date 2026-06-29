@@ -7,9 +7,22 @@ from sync.common import DB_PATH, connect
 
 from app import scoring
 
+JSON_SCHEMA_VERSION = 1
+
 
 def _connection(db_path: Path | None = None):
     return connect(db_path or DB_PATH)
+
+
+def build_json_envelope(kind: str, result: Any, **extra: Any) -> dict[str, Any]:
+    payload = {
+        "schema_version": JSON_SCHEMA_VERSION,
+        "kind": kind,
+        "result": result,
+    }
+    if extra:
+        payload.update(extra)
+    return payload
 
 
 def find_vuln(vuln_id: str, db_path: Path | None = None) -> dict[str, Any] | None:
@@ -296,49 +309,49 @@ def main() -> None:
             )
         rows = top_hot(limit=args.limit, vuln_ids=args.vuln_id or None)
         if args.json:
-            print(json.dumps(rows, indent=2, sort_keys=True))
+            print(json.dumps(build_json_envelope("hot", rows), indent=2, sort_keys=True))
         else:
             _print_hot_rows(rows, details=args.details)
     elif args.command == "vuln":
         row = find_vuln(args.vuln_id)
         if args.json:
-            print(json.dumps(row, indent=2, sort_keys=True, ensure_ascii=False))
+            print(json.dumps(build_json_envelope("vuln", row), indent=2, sort_keys=True, ensure_ascii=False))
         else:
             print(json.dumps(row, indent=2, sort_keys=True, ensure_ascii=False))
     elif args.command == "risks":
         rows = top_risks(limit=args.limit)
         if args.json:
-            print(json.dumps(rows, indent=2, sort_keys=True, ensure_ascii=False))
+            print(json.dumps(build_json_envelope("risks", rows), indent=2, sort_keys=True, ensure_ascii=False))
         else:
             print(json.dumps(rows, indent=2, sort_keys=True, ensure_ascii=False))
     elif args.command == "patch-queue":
         rows = recommend_patch_queue(limit=args.limit)
         if args.json:
-            print(json.dumps(rows, indent=2, sort_keys=True, ensure_ascii=False))
+            print(json.dumps(build_json_envelope("patch-queue", rows), indent=2, sort_keys=True, ensure_ascii=False))
         else:
             print(json.dumps(rows, indent=2, sort_keys=True, ensure_ascii=False))
     elif args.command == "has-exploit":
         result = {"vuln_id": args.vuln_id, "has_exploit": has_exploit(args.vuln_id)}
         if args.json:
-            print(json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False))
+            print(json.dumps(build_json_envelope("has-exploit", result), indent=2, sort_keys=True, ensure_ascii=False))
         else:
             print(json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False))
     elif args.command == "assets":
         rows = affected_assets(args.vuln_id)
         if args.json:
-            print(json.dumps(rows, indent=2, sort_keys=True, ensure_ascii=False))
+            print(json.dumps(build_json_envelope("assets", rows), indent=2, sort_keys=True, ensure_ascii=False))
         else:
             print(json.dumps(rows, indent=2, sort_keys=True, ensure_ascii=False))
     elif args.command == "asset-risk":
         row = explain_asset_risk(args.hostname)
         if args.json:
-            print(json.dumps(row, indent=2, sort_keys=True, ensure_ascii=False))
+            print(json.dumps(build_json_envelope("asset-risk", row), indent=2, sort_keys=True, ensure_ascii=False))
         else:
             print(json.dumps(row, indent=2, sort_keys=True, ensure_ascii=False))
     elif args.command == "freshness":
         rows = data_freshness()
         if args.json:
-            print(json.dumps(rows, indent=2, sort_keys=True, ensure_ascii=False))
+            print(json.dumps(build_json_envelope("freshness", rows), indent=2, sort_keys=True, ensure_ascii=False))
         else:
             print(json.dumps(rows, indent=2, sort_keys=True, ensure_ascii=False))
 

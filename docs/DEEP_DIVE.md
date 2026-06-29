@@ -97,3 +97,10 @@ python3 -m sync.fetch_hot --vuln-id "$VULN_ID" --simple
 
 Keep those fields stable. When the lookup is worth keeping, rerun the bounded
 ingest so the platform state stays consistent with the investigation.
+
+## Skills CLI envelope
+
+`python3 -m app.skills <command> --json` also returns a versioned envelope with
+`schema_version`, `kind`, and `result`. Keep that shape stable across
+`hot`, `vuln`, `risks`, `patch-queue`, `has-exploit`, `assets`, `asset-risk`,
+and `freshness`.
