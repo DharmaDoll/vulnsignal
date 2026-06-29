@@ -23,6 +23,7 @@ from sync.trivy_adapter import (
 
 
 DEFAULT_TARGETS = ["alpine", "debian", "ubuntu", "ghsa", "glad", "go", "osv", "seal"]
+DEEP_DIVE_SCHEMA_VERSION = 1
 
 
 def build_report(
@@ -55,6 +56,8 @@ def build_report(
     hot_rows = skills.top_hot(limit=5, db_path=db_path, vuln_ids=[vuln_id])
 
     return {
+        "schema_version": DEEP_DIVE_SCHEMA_VERSION,
+        "kind": "deep_dive",
         "vuln_id": vuln_id,
         "generated_at": utc_now(),
         "sources": {

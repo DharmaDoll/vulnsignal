@@ -19,6 +19,10 @@ Python execution:
 - If you have `uv` installed, prefer `uv run python -m ...` for repo commands.
 - The repository now carries a minimal `pyproject.toml` and `uv.lock` so `uv` can manage the Python runtime and future lockfile.
 
+Branch hygiene:
+
+- Before creating a new branch, rebase the current worktree onto `origin/main` so the branch starts from the latest mainline state.
+
 Quick local refresh:
 
 ```bash
@@ -91,7 +95,6 @@ Trivy vuln-list execution path:
 3. Ingest the local JSON tree with `python3 -m sync.fetch_trivy_vuln_list --source-dir data/aquasecurity-vuln-list-mirror`.
 4. Use the mirror as the normal source of truth when you need package ranges, fixed versions, or target-specific advisory detail; do not expect `core.db` alone to retain that full history.
 5. For a concrete lookup recipe, see [docs/DEEP_DIVE.md](docs/DEEP_DIVE.md). It points you to `core.db`, `vuln-list`, `db/exploit.db`, and `hot` in a repeatable order.
-6. For agent routing, keep the final watchlist or conclusion in the main agent and use sub-agents only for bounded evidence gathering.
 
 Vulnrichment execution path:
 

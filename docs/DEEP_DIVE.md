@@ -82,21 +82,25 @@ python3 -m sync.fetch_hot --vuln-id "$VULN_ID" --simple
 
 ## Worker contract
 
-`scripts/deep_dive.py <CVE-ID> --json` returns a bounded bundle with `core`,
-`trivy_vuln_list`, `go_exploitdb`, and `hot`. Use `--refresh-hot` only when you
-need to refresh the local attention signal first.
+`scripts/deep_dive.py <CVE-ID> --json` emits a versioned JSON object with:
 
-Keep the note keyed by:
-
+- `schema_version`: `1`
+- `kind`: `deep_dive`
 - `vuln_id`
-- `package_name`
-- `fixed_version`
-- `signal_type`
-- the local file path you used
+- `generated_at`
+- `sources`
+- `core`
+- `trivy_vuln_list`
+- `go_exploitdb`
+- `hot`
+- `hot_refresh`
 
-## Reproducibility checklist
+Keep those fields stable. When the lookup is worth keeping, rerun the bounded
+ingest so the platform state stays consistent with the investigation.
 
-When you finish the lookup, keep the same fields listed above.
+## Skills CLI envelope
 
-If the item is worth keeping, rerun the bounded ingest after the deep dive so
-the platform state stays consistent with the investigation.
+`python3 -m app.skills <command> --json` also returns a versioned envelope with
+`schema_version`, `kind`, and `result`. Keep that shape stable across
+`hot`, `vuln`, `risks`, `patch-queue`, `has-exploit`, `assets`, `asset-risk`,
+and `freshness`.

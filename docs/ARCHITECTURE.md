@@ -36,7 +36,7 @@ SQLite core.db           (db/)
         ↓
 Decision Engine          (app/scoring.py)
         ↓
-Skills API               (app/api.py)
+Skills CLI / workers     (app/skills.py)
 ```
 
 -----
@@ -84,5 +84,6 @@ Use `ATTACH DATABASE` for cross-DB queries only when necessary. ETL summaries in
 - Slack/Teams automation (separate repo if needed)
 - Executive dashboards (separate repo if needed)
 - Multi-tenant mode
+- HTTP API surface in the current phase
 
 A Long-Term Expansion module is only in scope if it **produces a signal that improves risk scoring**.

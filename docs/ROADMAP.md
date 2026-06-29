@@ -36,7 +36,7 @@ Key decisions:
 |Done|Asset CSV importer|CSV import creates or updates `assets` and `asset_observations` with conservative defaults|
 |Done|Minimal scoring/ranking|v1 scoring works from latest signals and ranking excludes VEX `not_affected`|
 |Done|Hot web intel signal|`hot` signals can be appended from RSS/article-feed discovery, resolved against `core.db`, and refreshed after the main ingest|
-|Planned|Minimal Skills API|`find_vuln`, `top_risks`, `has_exploit`, and `data_freshness` work from local DB|
+|Deferred|Minimal Skills API|Keep the CLI contract and scoring layer stable first; revisit HTTP surfaces later if needed|
 
 ## Simple Feed Quality Metrics
 
