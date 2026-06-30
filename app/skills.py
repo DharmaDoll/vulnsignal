@@ -270,33 +270,6 @@ def main() -> None:
     freshness_parser = subparsers.add_parser("freshness", help="Show feed freshness from fetch_log.")
     freshness_parser.add_argument("--json", action="store_true")
 
-    vuln_parser = subparsers.add_parser("vuln", help="Show one vulnerability from core.db.")
-    vuln_parser.add_argument("vuln_id")
-    vuln_parser.add_argument("--json", action="store_true")
-
-    risks_parser = subparsers.add_parser("risks", help="Show the top risk-ranked findings.")
-    risks_parser.add_argument("--limit", type=int, default=20)
-    risks_parser.add_argument("--json", action="store_true")
-
-    patch_parser = subparsers.add_parser("patch-queue", help="Show the patch queue.")
-    patch_parser.add_argument("--limit", type=int, default=20)
-    patch_parser.add_argument("--json", action="store_true")
-
-    has_exploit_parser = subparsers.add_parser("has-exploit", help="Check whether a vuln has exploit evidence.")
-    has_exploit_parser.add_argument("vuln_id")
-    has_exploit_parser.add_argument("--json", action="store_true")
-
-    assets_parser = subparsers.add_parser("assets", help="Show affected assets for one vulnerability.")
-    assets_parser.add_argument("vuln_id")
-    assets_parser.add_argument("--json", action="store_true")
-
-    asset_risk_parser = subparsers.add_parser("asset-risk", help="Explain risk for one asset hostname.")
-    asset_risk_parser.add_argument("hostname")
-    asset_risk_parser.add_argument("--json", action="store_true")
-
-    freshness_parser = subparsers.add_parser("freshness", help="Show feed freshness from fetch_log.")
-    freshness_parser.add_argument("--json", action="store_true")
-
     args = parser.parse_args()
 
     if args.command == "hot":
