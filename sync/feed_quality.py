@@ -5,9 +5,10 @@ import argparse
 import json
 import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
-from sync.common import connect
+from sync.common import DB_PATH, connect
 
 
 FEED_PROVIDERS = {
@@ -229,8 +230,8 @@ def summarize_feed(conn: sqlite3.Connection, feed: str) -> dict[str, Any]:
     }
 
 
-def summarize(feeds: list[str] | None = None) -> list[dict[str, Any]]:
-    conn = connect()
+def summarize(feeds: list[str] | None = None, db_path: Path = DB_PATH) -> list[dict[str, Any]]:
+    conn = connect(db_path)
     try:
         selected = feeds or list(FEED_PROVIDERS)
         return [summarize_feed(conn, feed) for feed in selected]
@@ -258,9 +259,10 @@ def print_table(items: list[dict[str, Any]]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--feed", action="append", help="Limit summary to one feed. Can be repeated.")
+    parser.add_argument("--db-path", type=Path, default=DB_PATH)
     parser.add_argument("--json", action="store_true", help="Print JSON instead of tabular output.")
     args = parser.parse_args()
-    items = summarize(args.feed)
+    items = summarize(args.feed, db_path=args.db_path)
     if args.json:
         print(json.dumps(items, indent=2, sort_keys=True))
     else:

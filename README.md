@@ -37,9 +37,16 @@ Recommended end-to-end flow for a local refresh and review:
 2. Refresh mirrors and `db/exploit.db` with `./scripts/refresh_all_sources.sh`.
 3. Ingest the latest feed window with `./scripts/ingest_recent_core_db.sh`.
 4. Refresh web intel with `uv run python -m sync.fetch_hot` after `core.db` is current.
-5. Inspect feed health with `uv run python -m sync.feed_quality`.
-6. Filter newly ingested CVEs with `uv run python scripts/triage_new_cves.py --hours 24 --limit 40 --json`.
-7. If you need context judgment, add `--llm-review-cmd "python3 scripts/codex_triage_review.py"` to let Codex downgrade weak hot-only or CVSS-only candidates.
+5. Run the normal daily review wrapper:
+
+   ```bash
+   uv run python scripts/run_daily_review.py --limit 40 --codex-review --deep-dive-watch-now
+   ```
+
+   The wrapper runs migrations, checks feed quality, chooses the previous successful CVE Program fetch as the cutoff, filters newly ingested CVEs, optionally asks Codex to suppress weak candidates, deep-dives `watch_now` items, and saves a JSON report under `data/reports/triage/`.
+
+6. For manual triage only, run `uv run python scripts/triage_new_cves.py --hours 24 --limit 40 --json`.
+7. If you need context judgment manually, add `--llm-review-cmd "python3 scripts/codex_triage_review.py"` to let Codex downgrade weak hot-only or CVSS-only candidates.
 8. For a quick answer, use `uv run python -m app.skills hot --limit 10 --details` or a short SQL list.
 
 For one practical scheduling example, see the `Hot web intel` section in [docs/FEEDS.md](docs/FEEDS.md). It shows a model case with daily core refresh, 6-hour hot collection, and a short hot watchlist. Treat it as an example, not a hard requirement.
