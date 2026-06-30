@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -24,6 +25,119 @@ from sync.trivy_adapter import (
 
 DEFAULT_TARGETS = ["alpine", "debian", "ubuntu", "ghsa", "glad", "go", "osv", "seal"]
 DEEP_DIVE_SCHEMA_VERSION = 1
+
+
+def _sentences(text: str | None) -> list[str]:
+    if not text:
+        return []
+    compact = " ".join(text.split())
+    return [item.strip() for item in re.split(r"(?<=[.!?])\s+", compact) if item.strip()]
+
+
+def _matching_sentences(text: str | None, patterns: tuple[str, ...]) -> list[str]:
+    matches: list[str] = []
+    for sentence in _sentences(text):
+        lowered = sentence.lower()
+        if any(pattern in lowered for pattern in patterns):
+            matches.append(sentence)
+    return matches
+
+
+def _signal_names(core: dict[str, Any]) -> set[str]:
+    signals = core.get("signals") or {}
+    return set(signals.keys()) if isinstance(signals, dict) else set()
+
+
+def _priority(core: dict[str, Any], hot_rows: list[dict[str, Any]], exploits: list[dict[str, Any]]) -> str:
+    vuln = core.get("vulnerability") or {}
+    signals = _signal_names(core)
+    cvss = float(vuln.get("cvss_score") or 0.0)
+    if "kev" in signals or exploits or "exploit" in signals:
+        return "watch_now"
+    if hot_rows or "hot" in signals:
+        return "watch_now"
+    if cvss >= 9.0:
+        return "monitor_only"
+    return "review_if_asset_exposed"
+
+
+def build_impact_template(
+    core: dict[str, Any],
+    advisories: list[dict[str, Any]],
+    exploits: list[dict[str, Any]],
+    hot_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    vuln = core.get("vulnerability") or {}
+    title = vuln.get("title") or ""
+    summary = vuln.get("summary") or ""
+    signals = sorted(_signal_names(core))
+    references: list[str] = []
+    for signal in (core.get("signals") or {}).values():
+        value = signal.get("value_json") if isinstance(signal, dict) else {}
+        for ref in (value or {}).get("references") or []:
+            if isinstance(ref, str) and ref not in references:
+                references.append(ref)
+    for advisory in advisories:
+        for ref in advisory.get("references") or []:
+            if isinstance(ref, str) and ref not in references:
+                references.append(ref)
+
+    affected = _matching_sentences(summary, ("only impacts", "affects", "affected", "vulnerable"))
+    if not affected:
+        affected = [
+            "Asset or service matches the vulnerable product/component described by the CVE title or package advisory.",
+        ]
+    not_affected = [
+        "No matching asset, package, service, or configuration is present.",
+        "A trusted VEX/not_affected assertion exists for the asset.",
+    ]
+    if fixed_versions := sorted({item.get("fixed_version") for item in advisories if item.get("fixed_version")}):
+        not_affected.append(f"Installed version is at or above a fixed version: {', '.join(fixed_versions[:5])}.")
+
+    mitigations = _matching_sentences(summary, ("remediate", "mitigat", "enable", "disable", "upgrade", "update", "patch", "fix"))
+    if not mitigations:
+        mitigations = [
+            "Apply the vendor fix or documented configuration change from the referenced advisory.",
+        ]
+
+    detection = [
+        "Correlate exposed matching assets with this vuln_id and review application/security logs around first_seen_at.",
+    ]
+    if exploits or "exploit" in signals:
+        detection.append("Search for known exploit or PoC indicators from go-exploitdb context.")
+    if hot_rows or "hot" in signals:
+        detection.append("Review hot evidence URLs/domains and monitor for matching exploit discussion or scanning patterns.")
+
+    return {
+        "affected_conditions": affected,
+        "not_affected_conditions": not_affected,
+        "verification_steps": [
+            "Confirm whether any asset/service uses the affected product, package, or cloud configuration.",
+            "Check package fixed versions or vendor configuration state where applicable.",
+            "Review core signals and local advisory mirror details before escalating.",
+        ],
+        "immediate_mitigation": mitigations,
+        "permanent_fix": [
+            "Apply the vendor-supported fixed version or durable configuration change.",
+            "Record asset status after remediation so future triage can suppress already-fixed exposure.",
+        ],
+        "detection_guidance": detection,
+        "priority": _priority(core, hot_rows, exploits),
+        "residual_risk": [
+            "Asset impact is not inferred unless findings/assets are populated.",
+            "Absence of exploit or hot evidence in local sources is not proof of non-exploitation.",
+        ],
+        "evidence": {
+            "title": title,
+            "cvss_score": vuln.get("cvss_score"),
+            "severity": vuln.get("severity"),
+            "signals": signals,
+            "trivy_vuln_list_rows": len(advisories),
+            "go_exploitdb_rows": len(exploits),
+            "hot_rows": len(hot_rows),
+            "references": references[:10],
+        },
+    }
 
 
 def build_report(
@@ -54,6 +168,7 @@ def build_report(
     ]
     exploits = [asdict(record) for record in get_exploits(vuln_id, db_path=exploit_db)]
     hot_rows = skills.top_hot(limit=5, db_path=db_path, vuln_ids=[vuln_id])
+    impact = build_impact_template(core, advisories, exploits, hot_rows)
 
     return {
         "schema_version": DEEP_DIVE_SCHEMA_VERSION,
@@ -70,6 +185,7 @@ def build_report(
         "go_exploitdb": exploits,
         "hot": hot_rows,
         "hot_refresh": hot_refresh_result,
+        "impact": impact,
     }
 
 
@@ -109,6 +225,7 @@ def main() -> None:
     print(f"trivy_vuln_list_rows: {len(report['trivy_vuln_list'])}")
     print(f"go_exploitdb_rows: {len(report['go_exploitdb'])}")
     print(f"hot_rows: {len(report['hot'])}")
+    print(f"priority: {report['impact']['priority']}")
 
 
 if __name__ == "__main__":
