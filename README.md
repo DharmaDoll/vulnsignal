@@ -38,7 +38,9 @@ Recommended end-to-end flow for a local refresh and review:
 3. Ingest the latest feed window with `./scripts/ingest_recent_core_db.sh`.
 4. Refresh web intel with `uv run python -m sync.fetch_hot` after `core.db` is current.
 5. Inspect feed health with `uv run python -m sync.feed_quality`.
-6. For a quick answer, use `uv run python -m app.skills hot --limit 10 --details` or a short SQL list.
+6. Filter newly ingested CVEs with `uv run python scripts/triage_new_cves.py --hours 24 --limit 40 --json`.
+7. If you need context judgment, add `--llm-review-cmd "python3 scripts/codex_triage_review.py"` to let Codex downgrade weak hot-only or CVSS-only candidates.
+8. For a quick answer, use `uv run python -m app.skills hot --limit 10 --details` or a short SQL list.
 
 For one practical scheduling example, see the `Hot web intel` section in [docs/FEEDS.md](docs/FEEDS.md). It shows a model case with daily core refresh, 6-hour hot collection, and a short hot watchlist. Treat it as an example, not a hard requirement.
 For `hot` discovery keywords and short-list review examples, see [docs/FEEDS.md](docs/FEEDS.md).
@@ -128,6 +130,7 @@ project/
     ├── core-db-insights/SKILL.md
     ├── feeds/SKILL.md
     ├── hot-intel/SKILL.md
+    ├── new-cve-triage/SKILL.md
     ├── schema/SKILL.md
     └── scoring/SKILL.md
 ```

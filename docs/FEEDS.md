@@ -703,7 +703,9 @@ Manual review order after the ingest pass:
 
 1. Run `uv run python -m sync.fetch_hot` only after `core.db` has been refreshed.
 2. Inspect `uv run python -m sync.feed_quality` output for freshness and coverage.
-3. Use `uv run python -m app.skills hot --limit 10 --details` or SQL queries for a short hot watchlist.
-4. Use the Skills CLI or direct SQL for a short vuln list when you do not need a full report.
+3. Run `uv run python scripts/triage_new_cves.py --hours 24 --limit 40 --json` to filter newly ingested CVEs.
+4. Optionally add `--llm-review-cmd "python3 scripts/codex_triage_review.py"` when weak hot-only or CVSS-only candidates need bounded Codex context judgment.
+5. Use `uv run python -m app.skills hot --limit 10 --details` or SQL queries for a short hot watchlist.
+6. Use the Skills CLI or direct SQL for a short vuln list when you do not need a full report.
 
 If you only need the newest operational KEV set, run `uv run python -m sync.fetch_kev` directly. For the bounded 3-year validation corpus, prefer the wrapper script so the mirror refresh and quality check happen in the same pass. The mirror refresh step matters for the advisory feeds because `ingest_recent_core_db.sh` diffs against the last ingested mirror refs.
