@@ -44,10 +44,25 @@ Recommended end-to-end flow for a local refresh and review:
    ```
 
    The wrapper runs migrations, checks feed quality, chooses the previous successful CVE Program fetch as the cutoff, filters newly ingested CVEs, optionally asks Codex to suppress weak candidates, deep-dives `watch_now` items, and saves a JSON report under `data/reports/triage/`.
+   Codex review inputs and outputs are logged as JSON under `data/reports/triage/llm_reviews/` for later root-cause review.
 
 6. For manual triage only, run `uv run python scripts/triage_new_cves.py --hours 24 --limit 40 --json`.
 7. If you need context judgment manually, add `--llm-review-cmd "python3 scripts/codex_triage_review.py"` to let Codex downgrade weak hot-only or CVSS-only candidates.
 8. For a quick answer, use `uv run python -m app.skills hot --limit 10 --details` or a short SQL list.
+
+Daily ops sequence:
+
+1. Refresh mirrors and source DBs with `./scripts/refresh_all_sources.sh`.
+2. Ingest the recent feed window with `./scripts/ingest_recent_core_db.sh`.
+3. Refresh `hot` with `uv run python -m sync.fetch_hot`.
+4. Triangulate new CVEs with `uv run python scripts/run_daily_review.py --limit 40 --codex-review --deep-dive-watch-now`.
+5. Deep-dive specific `watch_now` rows with `uv run python scripts/deep_dive.py CVE-2026-31431 --json` when needed.
+
+Relevant skills:
+
+- `feeds`: feed fetch jobs and adapters
+- `hot-intel`: refresh and inspect `hot`
+- `new-cve-triage`: filter newly ingested CVEs into a short watchlist
 
 For one practical scheduling example, see the `Hot web intel` section in [docs/FEEDS.md](docs/FEEDS.md). It shows a model case with daily core refresh, 6-hour hot collection, and a short hot watchlist. Treat it as an example, not a hard requirement.
 For `hot` discovery keywords and short-list review examples, see [docs/FEEDS.md](docs/FEEDS.md).
@@ -160,6 +175,38 @@ uv run python -m sync.fetch_trivy_db --db-dir db/trivy_cache.db
 GitHub CLI の認証を平文で残したくない場合は、`scripts/gh_secret.py store` で Secret Service に token を入れてから `scripts/check_dependabot.sh` を使ってください。
 移行中だけ `ALLOW_PLAINTEXT_GH=1` を付けると既存の `gh auth` 保存値を読むフォールバックにできます。
 Dependency cooldown は lock の更新時にかけています。たとえばローカルで dependency を更新するときは `UV_EXCLUDE_NEWER="$(date -u -d '7 days ago' +%F)"` を付けてから `uv lock` を実行してください。CI の frozen install では lockfile をそのまま使います。
+
+Dependabot の運用基準は次のとおりです。
+
+1. Dependabot PR は、まず自動生成された更新候補として扱う。
+2. 取り込み可否は GitHub Actions の `pytest` が通るかで決める。
+3. `uv` の version updates は Dependabot 側の `cooldown` で 7 日寝かせる。
+4. `uv sync --frozen --dev` が失敗した PR は、依存が cooldown 外になるまで待つか、更新対象を見直して再実行する。
+5. `uv.lock` はコミット対象で、CI では `uv lock` を回さない。
+6. 失敗理由の確認には `scripts/check_dependabot.sh` を使う。
+7. 古い open PR は不要なら close して整理する。
+
+Dependabot PR が来たときの運用フローは次のとおりです。
+
+1. PR の種類を確認する。
+   - security update は脆弱性修正が目的
+   - version update は通常追従で、cooldown の対象
+2. `scripts/check_dependabot.sh` で滞留 PR と alerts を確認する。
+3. PR ごとに GitHub Actions の `pytest` を確認する。
+4. version update が `uv sync --frozen --dev` で落ちた場合は、cooldown 外になるまで待つか、PR を close して次回更新を待つ。
+5. security update は cooldown を待たず、該当ライブラリだけを安全な版へ最小差分で更新する。
+6. security update の PR は `pytest` が通れば優先して取り込む。
+7. 失敗が一時的なものなら GitHub Actions を rerun して再確認する。
+8. `uv.lock` に問題がなければ squash merge で main に入れる。
+9. 不要になった Dependabot PR は close する。
+
+security update を手元で再現するときは、更新対象のパッケージだけを lock に反映してから必ずテストを通します。
+
+```bash
+UV_EXCLUDE_NEWER="$(date -u -d '7 days ago' +%F)" uv lock -P <pkg> --exclude-newer "$UV_EXCLUDE_NEWER"
+uv sync --frozen --dev
+uv run python -m pytest -q
+```
 
 ```bash
 UV_EXCLUDE_NEWER="$(date -u -d '7 days ago' +%F)"

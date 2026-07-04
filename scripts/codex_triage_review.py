@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +17,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 RESPONSE_KIND = "new_cve_context_review_response"
 SCHEMA_VERSION = 1
+DEFAULT_LOG_DIR = ROOT / "data" / "reports" / "triage" / "llm_reviews"
 
 
 RESPONSE_SCHEMA: dict[str, Any] = {
@@ -128,6 +131,71 @@ def _extract_json(text: str) -> dict[str, Any]:
     return parsed
 
 
+def _seed_codex_home(target_home: Path) -> None:
+    source_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+    for name in ("auth.json", "config.toml"):
+        source = source_home / name
+        if source.exists():
+            target = target_home / name
+            if target.exists() or target.is_symlink():
+                target.unlink()
+            target.symlink_to(source)
+
+
+def _payload_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    candidates = payload.get("candidates")
+    vuln_ids = []
+    if isinstance(candidates, list):
+        vuln_ids = [
+            str(candidate.get("vuln_id") or "")
+            for candidate in candidates
+            if isinstance(candidate, dict) and candidate.get("vuln_id")
+        ]
+    return {
+        "schema_version": payload.get("schema_version"),
+        "kind": payload.get("kind"),
+        "cutoff": payload.get("cutoff"),
+        "candidate_count": len(vuln_ids),
+        "vuln_ids": vuln_ids,
+    }
+
+
+def _write_log_file(
+    log_dir: Path,
+    started_at: datetime,
+    payload: dict[str, Any],
+    prompt: str,
+    cmd: list[str],
+    returncode: int,
+    stdout: str,
+    stderr: str,
+    response: dict[str, Any] | None,
+    error: str | None,
+) -> Path:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256()
+    digest.update(prompt.encode("utf-8"))
+    digest.update(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+    name = f"{started_at.strftime('%Y%m%dT%H%M%SZ')}-{digest.hexdigest()[:8]}.json"
+    path = log_dir / name
+    record = {
+        "schema_version": 1,
+        "kind": "codex_triage_review_log",
+        "started_at": started_at.isoformat(timespec="seconds"),
+        "finished_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "command": cmd,
+        "returncode": returncode,
+        "payload_summary": _payload_summary(payload),
+        "prompt": prompt,
+        "stdout": stdout,
+        "stderr": stderr,
+        "response": response,
+        "error": error,
+    }
+    path.write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
 def _normalize_response(response: dict[str, Any]) -> dict[str, Any]:
     reviews = response.get("reviews")
     if not isinstance(reviews, list):
@@ -161,10 +229,22 @@ def _normalize_response(response: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def run_codex(payload: dict[str, Any], codex_binary: str, model: str | None, timeout: int) -> dict[str, Any]:
+def run_codex(
+    payload: dict[str, Any],
+    codex_binary: str,
+    model: str | None,
+    timeout: int,
+    log_dir: Path | None = None,
+) -> dict[str, Any]:
     prompt = _build_prompt(payload)
-    with tempfile.TemporaryDirectory(prefix="vulnsignal-codex-review-") as tmp_dir:
+    started_at = datetime.now(timezone.utc)
+    log_dir = log_dir or DEFAULT_LOG_DIR
+    with tempfile.TemporaryDirectory(prefix="vulnsignal-codex-review-") as tmp_dir, tempfile.TemporaryDirectory(
+        prefix="vulnsignal-codex-home-"
+    ) as home_dir:
         tmp = Path(tmp_dir)
+        codex_home = Path(home_dir)
+        _seed_codex_home(codex_home)
         schema_path = tmp / "response.schema.json"
         output_path = tmp / "response.json"
         schema_path.write_text(json.dumps(RESPONSE_SCHEMA, indent=2), encoding="utf-8")
@@ -189,12 +269,41 @@ def run_codex(payload: dict[str, Any], codex_binary: str, model: str | None, tim
         cmd.append(prompt)
 
         env = os.environ.copy()
+        env["CODEX_HOME"] = str(codex_home)
         env.setdefault("NO_COLOR", "1")
         completed = subprocess.run(cmd, text=True, capture_output=True, timeout=timeout, check=False, env=env)
+        output = output_path.read_text(encoding="utf-8") if output_path.exists() else completed.stdout
+        try:
+            response = _normalize_response(_extract_json(output))
+        except Exception as exc:
+            _write_log_file(
+                log_dir=log_dir,
+                started_at=started_at,
+                payload=payload,
+                prompt=prompt,
+                cmd=cmd,
+                returncode=completed.returncode,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+                response=None,
+                error=str(exc),
+            )
+            raise RuntimeError(completed.stderr.strip() or str(exc)) from exc
+        _write_log_file(
+            log_dir=log_dir,
+            started_at=started_at,
+            payload=payload,
+            prompt=prompt,
+            cmd=cmd,
+            returncode=completed.returncode,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+            response=response,
+            error=None if completed.returncode == 0 else completed.stderr.strip() or f"codex exited with {completed.returncode}",
+        )
         if completed.returncode != 0:
             raise RuntimeError(completed.stderr.strip() or f"codex exited with {completed.returncode}")
-        output = output_path.read_text(encoding="utf-8") if output_path.exists() else completed.stdout
-    return _normalize_response(_extract_json(output))
+    return response
 
 
 def main() -> int:

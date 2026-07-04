@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import subprocess
 from pathlib import Path
+import tempfile
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -43,16 +44,30 @@ class CodexTriageReviewTests(TestCase):
             )
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
-        with patch.object(module.subprocess, "run", side_effect=fake_run) as run:
-            response = module.run_codex(payload, "codex", None, 30)
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp) / "llm_reviews"
+            with (
+                patch.object(module, "DEFAULT_LOG_DIR", log_dir),
+                patch.object(module.subprocess, "run", side_effect=fake_run) as run,
+            ):
+                response = module.run_codex(payload, "codex", None, 30)
+
+            logs = sorted(log_dir.glob("*.json"))
+            self.assertEqual(1, len(logs))
+            log = logs[0].read_text(encoding="utf-8")
+            self.assertIn("codex_triage_review_log", log)
+            self.assertIn("CVE-2026-0005", log)
 
         cmd = run.call_args.args[0]
+        env = run.call_args.kwargs["env"]
         self.assertIn("exec", cmd)
         self.assertIn("--sandbox", cmd)
         self.assertIn("read-only", cmd)
         self.assertIn("-a", cmd)
         self.assertIn("never", cmd)
         self.assertIn("--ephemeral", cmd)
+        self.assertIn("CODEX_HOME", env)
+        self.assertTrue(env["CODEX_HOME"].startswith("/tmp/vulnsignal-codex-home-"))
         self.assertEqual("new_cve_context_review_response", response["kind"])
         self.assertEqual("suppress", response["reviews"][0]["decision"])
 
