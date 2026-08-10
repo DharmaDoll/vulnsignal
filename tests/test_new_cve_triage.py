@@ -157,6 +157,87 @@ class NewCveTriageContractTests(TestCase):
         self.assertEqual("P2", monitor_by_id["CVE-2026-0005"]["tier"])
         self.assertEqual("critical CVSS", monitor_by_id["CVE-2026-0005"]["reason"])
 
+    def test_broad_internet_facing_auth_api_issue_becomes_watch_now(self) -> None:
+        module = _load_triage_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "core.db"
+            _init_db(db_path)
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO vulnerabilities (
+                      vuln_id, source, title, summary, severity, cvss_score, published_at, first_seen_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "CVE-2026-58319",
+                        "cve_program",
+                        "Apache Doris: Improper Authentication in Frontend HTTP API",
+                        "An unauthenticated attacker with network access to the FE HTTP service could perform unauthorized admin operations.",
+                        "CRITICAL",
+                        9.1,
+                        "2026-07-14T09:36:41.043Z",
+                        "2026-07-14T09:36:41.043Z",
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            with (
+                patch.object(module, "migrate", return_value=None),
+                patch.object(module, "utc_now", return_value="2026-07-14T10:00:00Z"),
+            ):
+                report = module.build_report("2026-07-14T00:00:00Z", limit=10, db_path=db_path)
+
+        watch_by_id = {item["vuln_id"]: item for item in report["watch_now"]}
+        self.assertIn("CVE-2026-58319", watch_by_id)
+        self.assertEqual("P1", watch_by_id["CVE-2026-58319"]["tier"])
+        self.assertEqual("broad internet-facing auth/API issue", watch_by_id["CVE-2026-58319"]["reason"])
+        self.assertTrue(watch_by_id["CVE-2026-58319"]["watch_now_locked"])
+
+    def test_context_review_cannot_downgrade_locked_watch_now_candidate(self) -> None:
+        module = _load_triage_module()
+        report = {
+            "summary": {
+                "recent_count": 1,
+                "candidate_count": 1,
+                "watch_now_count": 1,
+                "monitor_only_count": 0,
+                "suppressed_count": 0,
+            },
+            "watch_now": [
+                {
+                    "vuln_id": "CVE-2026-58319",
+                    "signals": [],
+                    "tier": "P1",
+                    "reason": "broad internet-facing auth/API issue",
+                    "confidence": "medium",
+                    "watch_now_locked": True,
+                }
+            ],
+            "monitor_only": [],
+            "caveats": [],
+        }
+        response = {
+            "reviews": [
+                {
+                    "vuln_id": "CVE-2026-58319",
+                    "decision": "monitor_only",
+                    "confidence": "low",
+                    "reason": "lower priority than other items",
+                }
+            ]
+        }
+
+        updated = module._apply_context_reviews(report, response)
+
+        self.assertEqual(1, updated["summary"]["watch_now_count"])
+        self.assertEqual(0, updated["summary"]["monitor_only_count"])
+        self.assertEqual(0, updated["summary"]["suppressed_count"])
+        self.assertEqual("watch_now", updated["watch_now"][0]["context_review"]["decision"])
+
     def test_context_review_can_suppress_cvss_only_candidate(self) -> None:
         module = _load_triage_module()
         report = {

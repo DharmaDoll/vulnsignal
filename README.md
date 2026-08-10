@@ -13,6 +13,36 @@ For a reproducible smaller validation run, use `./scripts/ingest_recent_core_db.
 It refreshes the local mirrors, ingests KEV, EPSS, CVE Program, GHSA, Trivy vuln-list, and Vulnrichment for the latest three calendar years by default, optionally ingests `db/exploit.db` when present, and finishes with `python3 -m sync.feed_quality`.
 
 Current implementation plan: `docs/ROADMAP.md`
+Report types and dependencies: `docs/REPORTS.md`
+
+## Quick start
+
+Run the normal daily refresh and review:
+
+```bash
+uv run python scripts/run_daily_review.py --daily --limit 40
+```
+
+This is the default operator path. It runs migrations, refreshes mirrors and
+`db/exploit.db`, ingests the recent feed window, refreshes `hot`, applies Codex
+context review, deep-dives `watch_now`, and saves a JSON report under
+`data/reports/triage/`. The default summary prints two detailed sections:
+`watch_list` with every watch item, and `hot_list` with every current hot item.
+The JSON report stores the same watch view under `watch_list` and the hot view
+under `hot_watchlist`. Use `--hot-limit N` only when you intentionally want to
+cap the hot list.
+
+For a reproducible recent-attention report without refreshing mirrors or
+ingesting feeds, use:
+
+```bash
+uv run python scripts/report_recent_attention.py --days 7 --as-of 2026-07-17T00:00:00+00:00
+```
+
+The report includes date columns (`published`, `first_seen`, and hot
+`observed`) and saves the exact JSON artifact under `data/reports/attention/`.
+Pin `--as-of` to reproduce the same relative window against the same local DB
+state.
 
 Python execution:
 
@@ -31,32 +61,29 @@ uv run python db/migrate.py
 ./scripts/ingest_recent_core_db.sh
 ```
 
+The daily wrapper avoids refreshing git mirrors twice in one run. If
+`refresh_all_sources.sh` already refreshed mirrors, the ingest step automatically
+uses `SKIP_MIRROR_REFRESH=1`.
+
 Recommended end-to-end flow for a local refresh and review:
 
-1. Run `uv run python db/migrate.py`.
-2. Refresh mirrors and `db/exploit.db` with `./scripts/refresh_all_sources.sh`.
-3. Ingest the latest feed window with `./scripts/ingest_recent_core_db.sh`.
-4. Refresh web intel with `uv run python -m sync.fetch_hot` after `core.db` is current.
-5. Run the normal daily review wrapper:
+1. Prefer the one-command daily wrapper:
 
    ```bash
-   uv run python scripts/run_daily_review.py --limit 40 --codex-review --deep-dive-watch-now
+   uv run python scripts/run_daily_review.py --daily --limit 40
    ```
 
    The wrapper runs migrations, checks feed quality, chooses the previous successful CVE Program fetch as the cutoff, filters newly ingested CVEs, optionally asks Codex to suppress weak candidates, deep-dives `watch_now` items, and saves a JSON report under `data/reports/triage/`.
    Codex review inputs and outputs are logged as JSON under `data/reports/triage/llm_reviews/` for later root-cause review.
 
-6. For manual triage only, run `uv run python scripts/triage_new_cves.py --hours 24 --limit 40 --json`.
-7. If you need context judgment manually, add `--llm-review-cmd "python3 scripts/codex_triage_review.py"` to let Codex downgrade weak hot-only or CVSS-only candidates.
-8. For a quick answer, use `uv run python -m app.skills hot --limit 10 --details` or a short SQL list.
+2. For manual triage only, run `uv run python scripts/triage_new_cves.py --hours 24 --limit 40 --json`.
+3. If you need context judgment manually, add `--llm-review-cmd "python3 scripts/codex_triage_review.py"` to let Codex downgrade weak hot-only or CVSS-only candidates.
+4. For a quick answer, use `uv run python -m app.skills hot --limit 10 --details` or a short SQL list.
 
 Daily ops sequence:
 
-1. Refresh mirrors and source DBs with `./scripts/refresh_all_sources.sh`.
-2. Ingest the recent feed window with `./scripts/ingest_recent_core_db.sh`.
-3. Refresh `hot` with `uv run python -m sync.fetch_hot`.
-4. Triangulate new CVEs with `uv run python scripts/run_daily_review.py --limit 40 --codex-review --deep-dive-watch-now`.
-5. Deep-dive specific `watch_now` rows with `uv run python scripts/deep_dive.py CVE-2026-31431 --json` when needed.
+1. Run `uv run python scripts/run_daily_review.py --daily --limit 40`.
+2. Deep-dive specific `watch_now` rows with `uv run python scripts/deep_dive.py CVE-2026-31431 --json` when needed.
 
 Relevant skills:
 
