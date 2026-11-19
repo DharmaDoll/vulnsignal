@@ -1,108 +1,13 @@
 ---
 name: feeds
-description: >
-  Use when implementing or modifying any fetch job (fetch_nvd.py,
-  fetch_cve_program.py, fetch_kev.py, fetch_epss.py, fetch_trivy.py, fetch_vex.py,
-  fetch_vulnrichment.py) or adapter module (trivy_adapter.py,
-  exploit_adapter.py).
-  Triggers on: “implement fetcher”, “add feed”, “fix adapter”,
-  “write sync job”, “fetch_nvd”, “fetch_kev”, “trivy_adapter”,
-  “exploit_adapter”, “retry logic”, “fetch_log”, “staleness”,
-  “data freshness”.
+description: 脆弱性フィードの取得・正規化ジョブ、ミラー差分、チェックポイント、外部 DB アダプターの実装と修正に使う。
 ---
 
-# Skill: feeds
+# フィード実装
 
-## Always read first
+[フィード仕様](../../../docs/FEEDS.md) と `sync/AGENTS.md` を確認し、対象ジョブの通常入口と共有ヘルパーに合わせる。
 
-`docs/FEEDS.md` — contains adapter contracts, signal type taxonomy,
-staleness thresholds, and per-feed specs.
-Do not implement fetch logic from memory. Read the doc, then code.
-
-## Non-negotiable rules for every fetch job
-
-```python
-# Every fetch job MUST follow this structure:
-def run_sync():
-    try:
-        rows = fetch_with_retry()
-        write_signals(rows)
-        write_fetch_log(feed="nvd", status="ok", rows_affected=len(rows))
-    except Exception as e:
-        write_fetch_log(feed="nvd", status="error", error_msg=str(e))
-        # exit cleanly — do NOT re-raise
-```
-
-- **Always write to `fetch_log`** — both on success and failure
-- **Never raise uncaught exceptions** to the scheduler — log and exit cleanly
-- **Never delete existing data** on failure — fall back to last known good state
-- For bounded local validation, prefer `--min-year` or `./scripts/ingest_recent_core_db.sh`
-- If `db/core.db` is locked, set `VULNSIGNAL_DB_PATH` to a separate SQLite file and run `db/migrate.py` plus the relevant fetcher there
-
-## Retry pattern (mandatory)
-
-```python
-import time
-
-def fetch_with_retry(fn, base=5, cap=300, attempts=3):
-    for i in range(attempts):
-        try:
-            return fn()
-        except Exception as e:
-            if i == attempts - 1:
-                raise
-            time.sleep(min(base * (2 ** i), cap))
-```
-
-## Adapter rules
-
-- All access to `db/exploit.db` → only through `exploit_adapter.py`
-- All access to Trivy DB → only through `trivy_adapter.py`
-- On cold start, validate schema version — raise named error and abort if mismatch:
-  - `ExploitDBSchemaError` for go-exploitdb
-  - `TrivyDBSchemaError` for Trivy DB
-- Never let raw external column names appear outside adapter files
-
-## Signal type taxonomy (must use exactly)
-
-|signal_type       |Source               |
-|------------------|---------------------|
-|`epss`            |EPSS / FIRST.org     |
-|`kev`             |CISA KEV             |
-|`exploit`         |go-exploitdb         |
-|`package_advisory`|Trivy DB             |
-|`vex`             |VEX/CSAF vendor feeds|
-|`enrichment`      |NVD, Vulnrichment    |
-
-Using wrong signal_type breaks scoring lookups — check taxonomy before writing signals.
-
-## Staleness thresholds (for data_freshness() implementation)
-
-|Feed        |Max staleness|
-|------------|-------------|
-|KEV         |3h           |
-|NVD         |24h          |
-|EPSS        |48h          |
-|Trivy DB    |24h          |
-|go-exploitdb|48h          |
-|VEX/CSAF    |48h          |
-|Vulnrichment|48h          |
-
-## Local validation workflow
-
-When you need a reproducible `core.db` sample that is small enough to inspect manually:
-
-1. Run `db/migrate.py` first.
-2. Refresh mirrors with `./scripts/update_data_mirrors.sh`.
-3. Pull KEV with `python3 -m sync.fetch_kev`.
-4. Pull EPSS with `python3 -m sync.fetch_epss`.
-5. Run `./scripts/ingest_recent_core_db.sh` for the full bounded corpus, or pass `--min-year 2024` to the relevant fetchers when you are validating a single feed.
-6. Inspect `python3 -m sync.feed_quality` output and `fetch_log`.
-
-Notes:
-
-- `./scripts/ingest_recent_core_db.sh` is the preferred reproducible path for the current 3-year validation corpus. It includes KEV, EPSS, and the mirrored feeds.
-- The script takes a lock to avoid two concurrent refreshes stepping on the same SQLite database.
-- If network refresh is unavailable, set `SKIP_MIRROR_REFRESH=1` and reuse the current local mirrors.
-- Use `python3 -m sync.fetch_kev` directly only when you want to refresh the live KEV feed in isolation.
-- Use `python3 -m sync.fetch_epss` directly only when you want to refresh the live EPSS snapshot in isolation.
+- 成否・キャッシュ利用を `fetch_log` に残し、取得失敗時には最後に取得できたデータを保持する。差分の起点は取り込みが成功した位置に置く。
+- EPSS は最新スナップショットと重要な変化の観測を区別する。外部 DB は対応するアダプター経由で読み、取り込み後にテーマ照合できる根拠を保持する。
+- 通常経路は `scripts/refresh_intelligence.py --refresh` と配下のシェルスクリプトで確認する。Trivy は通常の取得対象から除外されている。
+- 検証はマイグレーション済みの一時 DB と対象フィードの fixture を優先し、同一入力の再取り込み、失敗後の再開、取得量の計測を変更内容に応じて確認する。

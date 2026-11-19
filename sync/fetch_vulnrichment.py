@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from sync.common import (
+    run_measured,
     ROOT,
     FetchResult,
     JsonArrayCacheWriter,
@@ -197,7 +198,7 @@ def _extract_cvss(item: dict[str, Any]) -> tuple[float | None, str | None, str |
         for key in ("cvssV4_0", "cvssV3_1", "cvssV3_0", "cvss"):
             metric = candidate.get(key)
             if isinstance(metric, dict):
-                score = metric.get("baseScore") or metric.get("score")
+                score = metric.get("baseScore") if metric.get("baseScore") is not None else metric.get("score")
                 vector = metric.get("vectorString") or metric.get("vector")
                 severity = metric.get("baseSeverity") or metric.get("severity")
                 return (
@@ -205,7 +206,7 @@ def _extract_cvss(item: dict[str, Any]) -> tuple[float | None, str | None, str |
                     vector if isinstance(vector, str) else None,
                     _normalize_severity(severity),
                 )
-        score = candidate.get("baseScore") or candidate.get("score")
+        score = candidate.get("baseScore") if candidate.get("baseScore") is not None else candidate.get("score")
         vector = candidate.get("vectorString") or candidate.get("vector")
         severity = candidate.get("baseSeverity") or candidate.get("severity")
         if score is not None or vector is not None or severity is not None:
@@ -311,6 +312,12 @@ def _merge_vulnerability(
     return merged
 
 
+def _source_evidence(item):
+    fields = ("title", "summary", "severity", "cvss_score", "cvss_vector", "references",
+              "source_path", "published_at")
+    return {"source_fields_version": 1, **{field: item.get(field) for field in fields}}
+
+
 def sync(
     source_dir: Path,
     limit: int | None = None,
@@ -382,15 +389,8 @@ def sync(
                         vuln_id=merged["vuln_id"],
                         signal_type="enrichment",
                         provider=PROVIDER,
-                        score=merged["cvss_score"],
-                        value={
-                            "summary": merged["summary"],
-                            "severity": merged["severity"],
-                            "cvss_score": merged["cvss_score"],
-                            "cvss_vector": merged.get("cvss_vector"),
-                            "references": merged.get("references"),
-                            "source_path": merged.get("source_path"),
-                        },
+                        score=item["cvss_score"],
+                        value=_source_evidence(item),
                         observed_at=utc_now(),
                     ):
                         written += 1
@@ -428,15 +428,8 @@ def sync(
                     vuln_id=merged["vuln_id"],
                     signal_type="enrichment",
                     provider=PROVIDER,
-                    score=merged["cvss_score"],
-                    value={
-                        "summary": merged["summary"],
-                        "severity": merged["severity"],
-                        "cvss_score": merged["cvss_score"],
-                        "cvss_vector": merged.get("cvss_vector"),
-                        "references": merged.get("references"),
-                        "source_path": merged.get("source_path"),
-                    },
+                    score=item["cvss_score"],
+                    value=_source_evidence(item),
                     observed_at=utc_now(),
                 ):
                     written += 1
@@ -470,7 +463,7 @@ def main() -> None:
         help="Only write records published in this year or later to core.db.",
     )
     args = parser.parse_args()
-    result = sync(
+    result = run_measured(FEED, sync,
         source_dir=args.source_dir,
         limit=args.limit,
         dry_run=args.dry_run,

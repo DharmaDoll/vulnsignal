@@ -37,4 +37,11 @@ if [ -z "$EXPLOITDB_BINARY" ]; then
   exit 1
 fi
 
-python3 -m sync.update_exploitdb --binary "$EXPLOITDB_BINARY"
+source_args=()
+if [ -n "${EXPLOITDB_SOURCES:-}" ]; then
+  read -ra selected_sources <<< "$EXPLOITDB_SOURCES"
+  for source in "${selected_sources[@]}"; do
+    source_args+=(--source "$source")
+  done
+fi
+python3 -m sync.update_exploitdb --binary "$EXPLOITDB_BINARY" "${source_args[@]}"

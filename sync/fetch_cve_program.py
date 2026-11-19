@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from sync.common import (
+    run_measured,
     ROOT,
     FetchResult,
     JsonArrayCacheWriter,
@@ -354,6 +355,7 @@ def sync(
                             "severity": item.get("severity"),
                             "cvss_score": item.get("cvss_score"),
                             "cvss_vector": item.get("cvss_vector"),
+                            "published_at": item.get("published_at"),
                             "references": item.get("references"),
                             "source_path": item.get("source_path"),
                         },
@@ -391,6 +393,7 @@ def sync(
                         "severity": item.get("severity"),
                         "cvss_score": item.get("cvss_score"),
                         "cvss_vector": item.get("cvss_vector"),
+                        "published_at": item.get("published_at"),
                         "references": item.get("references"),
                         "source_path": item.get("source_path"),
                     },
@@ -422,7 +425,7 @@ def main() -> None:
     parser.add_argument("--changed-since-ref", help="Only ingest files changed since the given git ref, e.g. HEAD@{1}.")
     parser.add_argument("--min-year", type=int, default=MIN_YEAR, help="Only write records published in this year or later to core.db.")
     args = parser.parse_args()
-    result = sync(
+    result = run_measured(FEED, sync,
         source_dir=args.source_dir,
         limit=args.limit,
         dry_run=args.dry_run,

@@ -1,6 +1,8 @@
 # ROADMAP.md
 
-## Current Direction
+現在の改修方針と受け入れ条件は[脆弱性推薦の改修計画書](RECOMMENDATION_PLAN.md)を参照。
+
+## Previous feed feasibility phase
 
 The current phase is feed feasibility and local data quality. The goal is to prove that each source can provide useful, normalized vulnerability signals before building a heavier API or scoring layer.
 

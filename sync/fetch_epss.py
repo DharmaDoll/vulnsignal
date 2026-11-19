@@ -4,11 +4,13 @@ from __future__ import annotations
 import argparse
 import csv
 import gzip
+import hashlib
 import io
 from datetime import date, timedelta
 from pathlib import Path
 
 from sync.common import (
+    run_measured,
     CACHE_DIR,
     FetchResult,
     FetchError,
@@ -67,8 +69,9 @@ def load_payload(score_date: str, cache_only: bool) -> tuple[str, bool, str]:
             return read_cached_payload(cached_date), True, cached_date
     try:
         payload = fetch_bytes(URL_TEMPLATE.format(date=score_date), headers={"User-Agent": "vulnsignal/0.1"})
+        decoded = gzip.decompress(payload).decode("utf-8")
         write_bytes_cache(f"{FEED}-{score_date}", payload, "csv.gz")
-        return gzip.decompress(payload).decode("utf-8"), False, score_date
+        return decoded, False, score_date
     except Exception:
         try:
             return read_cached_payload(score_date), True, score_date
@@ -114,22 +117,37 @@ def sync(
     score_date: str | None = None,
 ) -> FetchResult:
     score_date = score_date or default_date()
-    payload, cache_used, payload_date = load_payload(score_date, cache_only)
-    rows = parse_rows(payload)
-    if limit is not None:
-        rows = rows[:limit]
-
-    if dry_run:
-        return FetchResult(rows_fetched=len(rows), rows_written=0, cache_used=cache_used)
-
+    score_date = date.fromisoformat(score_date).isoformat()
     conn = connect()
     written = 0
+    cache_used = False
     try:
+        batch = conn.execute("SELECT * FROM epss_batch WHERE singleton=1").fetchone()
+        cached = cache_path(score_date)
+        if limit is None and batch and batch["score_date"] == score_date and cached.is_file():
+            digest = hashlib.sha256(cached.read_bytes()).hexdigest()
+            if digest == batch["digest"]:
+                if not dry_run:
+                    log_fetch(conn, FEED, "ok", 0, cache_used=True)
+                    conn.commit()
+                return FetchResult(rows_fetched=0, rows_written=0, cache_used=True)
+        payload, cache_used, payload_date = load_payload(score_date, cache_only)
+        rows = parse_rows(payload)
+        if limit is not None:
+            rows = rows[:limit]
+        if dry_run:
+            return FetchResult(rows_fetched=len(rows), rows_written=0, cache_used=cache_used)
+        if not rows and limit is None:
+            raise FetchError("empty EPSS snapshot")
+        conn.execute("BEGIN IMMEDIATE")
+        applied = conn.execute("SELECT score_date FROM epss_batch WHERE singleton=1").fetchone()
+        if applied and applied["score_date"] > payload_date:
+            raise FetchError("older EPSS snapshot cannot replace newer applied batch")
         current = load_current_epss(conn)
         for item in rows:
             vuln_id = item.get("cve")
-            if not vuln_id:
-                continue
+            if not vuln_id or not item.get("epss"):
+                raise FetchError("incomplete EPSS record")
             epss = float(item.get("epss") or 0)
             percentile = float(item["percentile"]) if item.get("percentile") else None
             previous = current.get(vuln_id)
@@ -138,6 +156,16 @@ def sync(
             upsert_epss_current(conn, vuln_id, epss, percentile, payload_date)
             current[vuln_id] = (epss, percentile)
             written += 1
+        if limit is None:
+            # The dated file may also be consumed by a concurrent run. Record the
+            # checksum only when it represents exactly the payload we applied.
+            compressed = cache_path(payload_date).read_bytes()
+            if gzip.decompress(compressed).decode("utf-8") != payload:
+                raise FetchError("EPSS cache changed while applying the batch")
+            conn.execute("INSERT OR REPLACE INTO epss_batch VALUES (1, ?, ?, ?)",
+                         (payload_date, hashlib.sha256(compressed).hexdigest(), len(rows)))
+        elif written:
+            conn.execute("DELETE FROM epss_batch WHERE singleton=1")
         log_fetch(conn, FEED, "ok", written, cache_used=cache_used)
         conn.commit()
         return FetchResult(rows_fetched=len(rows), rows_written=written, cache_used=cache_used)
@@ -157,7 +185,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--cache-only", action="store_true")
     args = parser.parse_args()
-    result = sync(limit=args.limit, dry_run=args.dry_run, cache_only=args.cache_only, score_date=args.score_date)
+    result = run_measured(FEED, sync, limit=args.limit, dry_run=args.dry_run, cache_only=args.cache_only, score_date=args.score_date)
     print(result)
 
 

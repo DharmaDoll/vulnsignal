@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
 
 from db.migrate import migrate
 from sync.common import DB_PATH, connect, utc_now
+from sync.hot_intel import reviewed_hot_value
 
 
 TRIAGE_SCHEMA_VERSION = 1
@@ -28,6 +29,43 @@ BOUNDARY_FILTERS = (
     "fortinet",
     "juniper",
     "f5",
+)
+
+BROAD_WATCH_RISK_TERMS = (
+    "unauthenticated",
+    "authentication bypass",
+    "auth bypass",
+    "missing authentication",
+    "improper authentication",
+    "privilege escalation",
+    "remote code execution",
+    "rce",
+    "command injection",
+    "sql injection",
+    "path traversal",
+    "deserialization",
+)
+
+BROAD_WATCH_SCOPE_TERMS = (
+    "admin operation",
+    "admin operations",
+    "api",
+    "frontend",
+    "control plane",
+    "cloud",
+    "kubernetes",
+    "ci/cd",
+    "cicd",
+    "runner",
+    "artifact",
+    "gateway",
+    "proxy",
+    "load balancer",
+    "identity",
+    "sso",
+    "federation",
+    "server",
+    "network access",
 )
 
 
@@ -78,28 +116,56 @@ def _reason(row: dict[str, Any]) -> str:
     return "high CVSS"
 
 
-def _confidence(row: dict[str, Any]) -> str:
+def _confidence(row: dict[str, Any], watch_now_locked: bool = False) -> str:
     if row["kev_present"] or row["exploit_present"]:
         return "high"
+    if watch_now_locked:
+        return "medium"
     if row["hot_present"] or float(row["epss"] or 0.0) >= 0.05:
         return "medium"
     return "low"
 
 
+def _broad_watch_now(row: dict[str, Any]) -> bool:
+    if float(row["cvss_score"] or 0.0) < 9.0:
+        return False
+    text = f"{row.get('title') or ''} {row.get('summary') or ''}".lower()
+    if not text:
+        return False
+    risk_hits = {term for term in BROAD_WATCH_RISK_TERMS if term in text}
+    scope_hits = {term for term in BROAD_WATCH_SCOPE_TERMS if term in text}
+    if not risk_hits:
+        return False
+    return bool(scope_hits) or ("unauthenticated" in risk_hits and ("api" in text or "server" in text))
+
+
+def _watch_now_locked(row: dict[str, Any]) -> bool:
+    return _broad_watch_now(row)
+
+
+def _watch_now_reason(row: dict[str, Any]) -> str | None:
+    if _watch_now_locked(row):
+        return "broad internet-facing auth/API issue"
+    return None
+
+
 def _candidate(row: dict[str, Any]) -> dict[str, Any]:
+    watch_now_locked = _watch_now_locked(row)
     return {
         "vuln_id": row["vuln_id"],
         "title": row["title"],
         "source": row["source"],
+        "summary": row["summary"],
         "published_at": row["published_at"],
         "first_seen_at": row["first_seen_at"],
         "cvss": row["cvss_score"],
         "epss": row["epss"],
         "signals": _signals(row),
-        "tier": _tier(row),
-        "reason": _reason(row),
-        "confidence": _confidence(row),
+        "tier": "P1" if watch_now_locked else _tier(row),
+        "reason": _watch_now_reason(row) or _reason(row),
+        "confidence": _confidence(row, watch_now_locked=watch_now_locked),
         "score": row["score"],
+        "watch_now_locked": watch_now_locked,
     }
 
 
@@ -127,7 +193,7 @@ def _latest_signal_context(conn, vuln_ids: list[str]) -> dict[str, dict[str, Any
                    ORDER BY observed_at DESC, id DESC
                  ) AS rn
           FROM signals
-          WHERE vuln_id IN ({placeholders})
+          WHERE vuln_id IN ({placeholders}) AND id NOT IN (SELECT id FROM dismissed_hot)
         )
         WHERE rn = 1
         ORDER BY vuln_id, signal_type
@@ -143,6 +209,9 @@ def _latest_signal_context(conn, vuln_ids: list[str]) -> dict[str, dict[str, Any
             "observed_at": row["observed_at"],
         }
         if row["signal_type"] == "hot":
+            if row["provider"] == "Web Hot Intel":
+                value = reviewed_hot_value(row["vuln_id"], value)
+                evidence["score"] = value["score"]
             evidence["summary"] = {
                 "attention_score": value.get("attention_score") or value.get("score"),
                 "domains": value.get("domains") or value.get("top_domains") or [],
@@ -178,6 +247,7 @@ def _review_payload(report: dict[str, Any], signal_context: dict[str, dict[str, 
             "Return JSON with reviews[].",
             "Allowed decision values: watch_now, monitor_only, suppress.",
             "Do not suppress KEV or exploit-backed candidates; explain them instead.",
+            "Do not downgrade candidates marked watch_now_locked; keep them watch_now.",
             "Downgrade weak hot-only or CVSS-only candidates when the context is not actionable.",
         ],
         "cutoff": report["cutoff"],
@@ -241,7 +311,7 @@ def _review_by_id(response: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 def _protected_from_suppression(item: dict[str, Any]) -> bool:
     signals = set(item.get("signals") or [])
-    return bool(signals & {"kev", "exploit"})
+    return bool(signals & {"kev", "exploit"}) or bool(item.get("watch_now_locked"))
 
 
 def _apply_context_reviews(report: dict[str, Any], response: dict[str, Any]) -> dict[str, Any]:
@@ -255,7 +325,9 @@ def _apply_context_reviews(report: dict[str, Any], response: dict[str, Any]) -> 
         review = by_id.get(item["vuln_id"])
         if review:
             decision = str(review["decision"])
-            if decision == "suppress" and _protected_from_suppression(item):
+            if item.get("watch_now_locked"):
+                decision = "watch_now"
+            elif decision == "suppress" and _protected_from_suppression(item):
                 decision = "watch_now"
             reviewed = {
                 **item,
@@ -298,7 +370,7 @@ def _apply_context_reviews(report: dict[str, Any], response: dict[str, Any]) -> 
     }
     updated["caveats"] = [
         *report["caveats"],
-        "Context review can downgrade weak hot-only or CVSS-only candidates, but cannot suppress KEV or exploit-backed candidates.",
+        "Context review can downgrade weak hot-only or CVSS-only candidates, but cannot suppress KEV, exploit-backed, or deterministic broad watch_now candidates.",
     ]
     return updated
 
@@ -314,6 +386,12 @@ def build_report(
     migrate(db_path)
     conn = connect(db_path)
     try:
+        conn.execute("BEGIN")
+        conn.execute("CREATE TEMP TABLE dismissed_hot(id INTEGER PRIMARY KEY)")
+        web_hot = conn.execute("SELECT id,vuln_id,value_json FROM signals WHERE provider='Web Hot Intel' AND signal_type='hot'")
+        conn.executemany("INSERT INTO dismissed_hot VALUES(?)", (
+            (row["id"],) for row in web_hot if not reviewed_hot_value(row["vuln_id"], _parse_json(row["value_json"]))
+        ))
         filters = " AND ".join(
             [
                 "lower(coalesce(v.title, '') || ' ' || coalesce(v.summary, '')) NOT LIKE ?"
@@ -330,13 +408,14 @@ def build_report(
                        PARTITION BY vuln_id, signal_type
                        ORDER BY observed_at DESC, id DESC
                      ) AS rn
-              FROM signals
+              FROM signals WHERE id NOT IN (SELECT id FROM dismissed_hot)
             ),
             flags AS (
               SELECT
                 v.vuln_id,
                 v.source,
                 v.title,
+                v.summary,
                 v.published_at,
                 v.first_seen_at,
                 COALESCE(v.cvss_score, 0) AS cvss_score,
@@ -423,6 +502,7 @@ def build_report(
             **report,
             "context_review": {
                 "enabled": True,
+                "input": payload,
                 "status": "error",
                 "error": str(exc),
             },
@@ -431,7 +511,10 @@ def build_report(
                 "Context review failed; report fell back to deterministic triage only.",
             ],
         }
-    return _apply_context_reviews(report, response)
+    reviewed = _apply_context_reviews(report, response)
+    reviewed["context_review"]["input"] = payload
+    reviewed["context_review"]["output"] = response
+    return reviewed
 
 
 def _print_summary(report: dict[str, Any]) -> None:

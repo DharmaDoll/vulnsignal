@@ -4,15 +4,12 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import datetime, timedelta, timezone
-from contextlib import suppress
 from pathlib import Path
 from typing import Any
 from collections import defaultdict
-from urllib.parse import urlparse
 
-from sync.common import FetchResult, append_signal, connect, log_fetch, utc_now
+from sync.common import run_measured, FetchResult, append_signal, connect, log_fetch, utc_now
 from sync.hot_intel import SearchHit, collect_hot_evidence_for_vuln, discover_hot_candidates
-from sync.trivy_adapter import TRIVY_VULN_LIST_DEFAULT_DIR, load_advisories_for_vuln_id_from_directory
 
 
 FEED = "hot"
@@ -25,16 +22,10 @@ HOT_PROFILES = {
     "balanced": {"search_cap": 20, "results_per_query": 20, "queries_per_vuln": 3},
     "broad": {"search_cap": 30, "results_per_query": 30, "queries_per_vuln": 4},
 }
-BOUNDARY_HINTS = ("cisco", "palo alto", "fortinet", "juniper", "f5", "watchguard", "sonicwall", "checkpoint")
 
 
 def _default_cutoff(days: int = 7) -> str:
     return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
-
-
-def _is_boundary(title: str | None, source: str | None) -> bool:
-    text = f"{title or ''} {source or ''}".lower()
-    return any(hint in text for hint in BOUNDARY_HINTS)
 
 
 def _load_candidates(conn, vuln_ids: list[str]) -> list[dict[str, Any]]:
@@ -57,8 +48,26 @@ def _load_candidates(conn, vuln_ids: list[str]) -> list[dict[str, Any]]:
         row = by_id.get(vuln_id)
         if row is None:
             continue
-        if _is_boundary(row["title"], row["source"]):
-            continue
+        # Historical Trivy imports can fill fields on an existing canonical row.
+        if str(row["source"]).lower().startswith("trivy") or conn.execute(
+            "SELECT 1 FROM signals WHERE vuln_id=? AND lower(provider) LIKE 'trivy%' LIMIT 1",
+            (vuln_id,),
+        ).fetchone():
+            trusted = conn.execute("""
+                SELECT provider,value_json FROM signals WHERE vuln_id=?
+                  AND provider IN ('CVE Program','GitHub Advisory Database','CISA KEV')
+                ORDER BY observed_at DESC,id DESC
+            """, (vuln_id,))
+            metadata = {}
+            for evidence in trusted:
+                value = json.loads(evidence["value_json"] or "{}")
+                for key in ("title", "summary", "product", "package_name", "severity", "cvss_score", "published_at"):
+                    if value.get(key) is not None:
+                        metadata.setdefault(key, value[key])
+            if not metadata:
+                continue
+            row = {**dict.fromkeys(row.keys()), **metadata, "source": "provider evidence", "vuln_id": vuln_id,
+                   "title": metadata.get("title") or metadata.get("product") or metadata.get("package_name")}
         candidates.append(
             {
                 "vuln_id": row["vuln_id"],
@@ -83,67 +92,11 @@ def _candidate_hits(discovery_hits: list[dict[str, Any]]) -> dict[str, list[Sear
             title=title or str(hit.get("title") or ""),
             url=str(hit.get("url") or ""),
             domain=str(hit.get("domain") or ""),
+            metadata={**(hit.get("metadata") or {}), "published_at": hit.get("published_at")},
         )
         for vuln_id in hit.get("cve_ids", []):
             hits_by_vuln[vuln_id].append(search_hit)
     return hits_by_vuln
-
-
-def _reference_hits_for_vuln(
-    conn,
-    vuln_id: str,
-    title: str | None,
-    summary: str | None,
-    queries_per_vuln: int,
-) -> list[SearchHit]:
-    rows = conn.execute(
-        """
-        SELECT value_json
-        FROM signals
-        WHERE vuln_id = ? AND signal_type = 'package_advisory'
-        ORDER BY observed_at DESC, id DESC
-        """,
-        (vuln_id,),
-    ).fetchall()
-    references: list[str] = []
-    for row in rows:
-        try:
-            value = json.loads(row["value_json"] or "{}")
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(value, dict):
-            continue
-        for ref in value.get("references") or []:
-            if isinstance(ref, str) and ref not in references:
-                references.append(ref)
-    if not references:
-        with suppress(Exception):
-            advisories = load_advisories_for_vuln_id_from_directory(
-                TRIVY_VULN_LIST_DEFAULT_DIR,
-                vuln_id,
-                observed_at=utc_now(),
-            )
-            for advisory in advisories:
-                for ref in advisory.references or []:
-                    if isinstance(ref, str) and ref not in references:
-                        references.append(ref)
-    if not references:
-        return []
-    from sync.hot_intel import hot_queries
-
-    query_list = hot_queries(title, summary)
-    if not query_list:
-        return []
-    query = query_list[1] if len(query_list) > 1 else query_list[0]
-    return [
-        SearchHit(
-            query=query,
-            title=title or summary or vuln_id,
-            url=ref,
-            domain=urlparse(ref).netloc.lower(),
-        )
-        for ref in references[: max(1, queries_per_vuln)]
-    ]
 
 
 def sync(
@@ -195,6 +148,7 @@ def sync(
                 query_terms=query_terms,
                 follow_article_links=not simple,
                 enable_duckduckgo=not simple,
+                enable_hatena=not simple,
             )
             candidates = _load_candidates(conn, discovery["discovered_vuln_ids"])
             hits_by_vuln = _candidate_hits(discovery["search_hits"])
@@ -211,23 +165,6 @@ def sync(
                     results_per_query=results_per_query,
                     hits=hits_by_vuln.get(candidate["vuln_id"], []) if hits_by_vuln is not None else None,
                 )
-                if not evidence:
-                    ref_hits = _reference_hits_for_vuln(
-                        conn,
-                        candidate["vuln_id"],
-                        candidate.get("title"),
-                        candidate.get("summary"),
-                        queries_per_vuln,
-                    )
-                    if ref_hits:
-                        evidence = collect_hot_evidence_for_vuln(
-                            candidate["vuln_id"],
-                            title=candidate.get("title"),
-                            summary=candidate.get("summary"),
-                            queries_per_vuln=queries_per_vuln,
-                            results_per_query=results_per_query,
-                            hits=ref_hits,
-                        )
             except Exception as exc:
                 errors += 1
                 continue
@@ -244,7 +181,9 @@ def sync(
                 "discovery_queries": discovery["search_queries"],
                 "discovery_query_count": discovery["query_count"],
                 "discovery_result_count": discovery["result_count"],
-                "discovery_hits": discovery["search_hits"],
+                "hot_rule_version": 2,
+                "discovery_hits": [hit for hit in discovery["search_hits"]
+                                   if candidate["vuln_id"] in hit.get("cve_ids", [])][:10],
                 "discovered_vuln_ids": discovery["discovered_vuln_ids"],
                 "fetch_errors": discovery.get("fetch_errors", []),
                 "query_terms": query_terms or [],
@@ -263,7 +202,9 @@ def sync(
                 written += 1
                 conn.commit()
 
-        if errors:
+        if discovery.get("fetch_errors") and not discovery.get("result_count"):
+            log_fetch(conn, FEED, "error", written, "discovery returned no results after source failures")
+        elif errors:
             log_fetch(conn, FEED, "error", written, f"search failures for {errors} candidate(s)")
         else:
             log_fetch(conn, FEED, "ok", written)
@@ -308,7 +249,7 @@ def main() -> None:
     )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    result = sync(
+    result = run_measured(FEED, sync,
         cutoff=args.cutoff,
         search_cap=args.search_cap,
         queries_per_vuln=args.queries_per_vuln,

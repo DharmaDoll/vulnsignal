@@ -130,7 +130,11 @@ Operational implications:
 
 -----
 
-## Trivy DB adapter contract
+## Historical Trivy adapters
+
+Trivy ingestion and lookups have been retired from the active workflow. The following legacy contracts describe archived data and offline compatibility utilities. The recommendation engine consumes attributed evidence from the active providers.
+
+### Trivy DB adapter contract
 
 File: `sync/trivy_adapter.py`
 
@@ -163,7 +167,7 @@ Rules:
 - Pin version in `config/settings.yaml` under `trivy_db.expected_schema_version`
 - Signal type written to core.db: `enrichment` (distinct from `exploit`)
 
-## Trivy DB execution notes
+### Historical Trivy DB execution notes
 
 Use the compiled Trivy DB cache only when you explicitly want scanner-aligned vulnerability metadata enrichment from Trivy's DB.
 
@@ -209,7 +213,7 @@ After pulling with ORAS, copy or extract the resulting `trivy.db` and `metadata.
 
 If `db/core.db` is locked by another ingest run and you want to validate Trivy DB in isolation, set `VULNSIGNAL_DB_PATH` to point at a separate SQLite file before running `db/migrate.py` and `python3 -m sync.fetch_trivy_db`.
 
-## Trivy vuln-list execution notes
+### Historical Trivy vuln-list execution notes
 
 Use the raw advisory tree from `aquasecurity/vuln-list` as the first ingestion step.
 This is the default Trivy advisory path. If you need package ranges, fixed-version fidelity,
@@ -507,10 +511,13 @@ For a bounded validation ingest, add `--min-year 2024`.
 - Start from broad RSS / article-feed discovery over current exploitation and advisory reporting.
 - Use the number of discovered vulnerabilities as the default search budget.
 - Keep the search budget bounded by a configurable cap so a large corpus does not fan out into an unbounded crawl.
-- Current default discovery depth is 20 items per RSS feed per run.
+- The default discovery depth is 20 items per RSS feed. Candidate slots rotate across feeds one CVE at a time. If slots remain, the collector checks article metadata for up to 20 additional URLs across all feeds in the default profile. The RSS-only discovery option skips page requests and web search.
 - Optional extra discovery terms can be supplied on the CLI to widen the web search beyond the built-in baseline.
 - Extract CVE IDs from feed items and resolve them against `core.db` before writing signals.
-- Treat the feed item title, summary, and source domain as the evidence payload for classification.
+- Require the exact CVE in the source headline, item summary, or article URL. On RSS items without an ID, the full profile checks the article's HTML title and description metadata. Navigation, sidebars and related links do not establish a match. A title-only targeted search still needs source evidence for the requested CVE. A reference copied from the local advisory cannot establish current coverage.
+- Classify the source text. Search query terms never establish active exploitation or public PoC. Reports naming multiple CVEs contribute attention, with issue-specific exploitation and PoC labels withheld. Store up to ten accepted URLs per CVE, with their evidence text.
+- Use the RSS publication time for mart attention events when available, falling back to the first local observation. The hot watchlist displays the observation time. Calendar recommendation snapshots capture what was observed within their decision window.
+- Hot rule version 2 also reviews historical observations using their saved article evidence. A body-only historical match without independently attributable text drops out of the search index. Run `python -m scripts.intel refresh` after migration to rebuild the derived rows.
 - Prefer high-signal sources:
   - official vendor advisories and security blogs
   - CISA / government advisories
@@ -678,7 +685,7 @@ The script:
 - refreshes the local git mirrors unless `SKIP_MIRROR_REFRESH=1`
 - assumes `./scripts/update_data_mirrors.sh` has already been run if you want the latest mirror commits before a diff-based ingest
 - fetches KEV and EPSS from the live feeds, falling back to the local cache when needed
-- ingests CVE Program, GHSA, Trivy vuln-list, and Vulnrichment with a rolling `MIN_YEAR` cutoff
+- ingests CVE Program, GHSA, and Vulnrichment with a rolling `MIN_YEAR` bootstrap window and `MIN_CHANGED_YEAR` (default 2015) for changed advisories
 - optionally ingests `db/exploit.db` when that local source exists
 - finishes with `uv run python -m sync.feed_quality`
 - takes a lock so only one refresh run touches `core.db` at a time
@@ -696,7 +703,7 @@ Current end-to-end flow for a reproducible local corpus:
 
 1. Run `db/migrate.py`.
 2. Refresh the source inputs with `./scripts/refresh_all_sources.sh`. If you are offline and intentionally reusing the current mirrors, set `SKIP_MIRROR_REFRESH=1`. If you want to skip the go-exploitdb refresh for a local-only run, set `SKIP_EXPLOITDB_UPDATE=1`.
-3. Run `./scripts/ingest_recent_core_db.sh` to fetch KEV and EPSS, ingest `cvelistV5`, GHSA, Trivy vuln-list, and Vulnrichment with `--min-year`, and finish with `uv run python -m sync.feed_quality`.
+3. Run `./scripts/ingest_recent_core_db.sh` to fetch KEV and EPSS, ingest `cvelistV5`, GHSA, and Vulnrichment with `--min-year`, and finish with `uv run python -m sync.feed_quality`.
 4. Optionally ingest `db/exploit.db` when that local source is present.
 
 Manual review order after the ingest pass:

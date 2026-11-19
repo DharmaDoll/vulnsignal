@@ -9,9 +9,11 @@ import subprocess
 import tempfile
 import time
 from contextlib import AbstractContextManager, contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from sync.cvss import assessment
 from typing import Any
 from urllib.parse import urlsplit
 from urllib.error import URLError
@@ -38,6 +40,47 @@ class FetchResult:
     cache_used: bool = False
 
 
+@dataclass
+class FeedMeasurement:
+    feed: str
+    http_body_bytes: int = 0
+    fetch_id: int | None = None
+    status: str | None = None
+
+
+_measurement: ContextVar[FeedMeasurement | None] = ContextVar("feed_measurement", default=None)
+
+
+def run_measured(feed, sync_job, **kwargs):
+    """Attach measurements to exactly the fetch_log row written by this CLI job."""
+    from db.migrate import migrate
+
+    migrate(DB_PATH)
+    if kwargs.get("dry_run"):
+        return sync_job(**kwargs)
+    started = time.monotonic()
+    measurement = FeedMeasurement(feed)
+    token = _measurement.set(measurement)
+    result = None
+    try:
+        result = sync_job(**kwargs)
+    except Exception as exc:
+        if measurement.fetch_id is None:
+            with connect() as conn:
+                log_fetch(conn, feed, "error", error_msg=str(exc))
+        raise
+    finally:
+        _measurement.reset(token)
+        if measurement.fetch_id is not None:
+            with connect() as conn:
+                conn.execute("INSERT INTO feed_metrics VALUES (?, ?, ?, ?)",
+                             (measurement.fetch_id, time.monotonic() - started,
+                              result.rows_fetched if result else None, measurement.http_body_bytes))
+    if measurement.status == "error":
+        raise SystemExit(f"{feed} failed; see fetch_log")
+    return result
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -49,6 +92,14 @@ def connect(db_path: Path = DB_PATH) -> sqlite3.Connection:
 
 
 def fetch_bytes(url: str, headers: dict[str, str] | None = None, attempts: int = 3) -> bytes:
+    payload = _download_bytes(url, headers, attempts)
+    measurement = _measurement.get()
+    if measurement is not None:
+        measurement.http_body_bytes += len(payload)
+    return payload
+
+
+def _download_bytes(url, headers, attempts):
     request = Request(url, headers=headers or {})
     last_error: Exception | None = None
     for attempt in range(attempts):
@@ -315,13 +366,17 @@ def log_fetch(
     error_msg: str | None = None,
     cache_used: bool = False,
 ) -> None:
-    conn.execute(
+    cursor = conn.execute(
         """
         INSERT INTO fetch_log (feed, attempted_at, status, error_msg, rows_affected, cache_used)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
         (feed, utc_now(), status, error_msg, rows_affected, int(cache_used)),
     )
+    measurement = _measurement.get()
+    if measurement is not None and measurement.feed == feed:
+        measurement.fetch_id = cursor.lastrowid
+        measurement.status = status
 
 
 def append_signal(
@@ -364,6 +419,23 @@ def append_signal(
             value_json,
         ),
     )
+    # A score returning to an older value is a new observation, even when the
+    # source sends exactly the same payload as it did on the first occurrence.
+    current = assessment(value) if signal_type == "enrichment" else None
+    if conn.total_changes == before and current is not None:
+        rows = conn.execute("""
+            SELECT value_json FROM signals WHERE vuln_id=? AND signal_type=? AND provider=?
+            ORDER BY id DESC
+        """, (vuln_id, signal_type, provider))
+        for row in rows:
+            previous = assessment(json.loads(row[0]))
+            if previous and previous[1:] == current[1:]:
+                if previous[0] != current[0]:
+                    conn.execute("""
+                        INSERT INTO signals(vuln_id,signal_type,provider,score,value_json,observed_at)
+                        VALUES (?,?,?,?,?,?)
+                    """, (vuln_id, signal_type, provider, score, value_json, observed_at or utc_now()))
+                break
     return conn.total_changes > before
 
 

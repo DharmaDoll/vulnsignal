@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from sync.hot_intel import attention_score_from_value
+from sync.hot_intel import attention_score_from_value, reviewed_hot_value
 
 
 SCORING_VERSION = "v1"
@@ -100,6 +100,11 @@ def _latest_signals(conn: sqlite3.Connection, vuln_id: str) -> dict[str, sqlite3
     for row in rows:
         signal_type = row["signal_type"]
         if signal_type not in latest:
+            if signal_type == "hot" and row["provider"] == "Web Hot Intel":
+                value = reviewed_hot_value(vuln_id, _signal_value(row))
+                if not value:
+                    continue
+                row = {**dict(row), "score": value["score"], "value_json": json.dumps(value)}
             latest[signal_type] = row
     return latest
 
@@ -584,7 +589,9 @@ def top_hot(
           v.cvss_score,
           v.published_at,
           v.first_seen_at,
-          v.updated_at
+          v.updated_at,
+          EXISTS(SELECT 1 FROM signals k WHERE k.vuln_id=s.vuln_id AND k.signal_type='kev') AS kev_present,
+          EXISTS(SELECT 1 FROM signals x WHERE x.vuln_id=s.vuln_id AND x.signal_type='exploit') AS exploit_present
         FROM signals s
         JOIN vulnerabilities v ON v.vuln_id = s.vuln_id
         WHERE s.signal_type = 'hot'
@@ -595,16 +602,23 @@ def top_hot(
     ).fetchall()
 
     latest_by_vuln: dict[str, sqlite3.Row] = {}
+    values = {}
     for row in rows:
         vuln_id = row["vuln_id"]
-        if vuln_id not in latest_by_vuln:
+        if vuln_id in latest_by_vuln:
+            continue
+        value = _signal_value(row)
+        if row["provider"] == "Web Hot Intel":
+            value = reviewed_hot_value(vuln_id, value)
+        if value is not None:
             latest_by_vuln[vuln_id] = row
+            values[vuln_id] = value
     ranked = sorted(
         latest_by_vuln.values(),
         key=lambda row: (
-            -(attention_score_from_value(_signal_value(row)) or float(row["score"] or 0.0)),
-            -int("kev" in _latest_signals(conn, row["vuln_id"])),
-            -int("exploit" in _latest_signals(conn, row["vuln_id"])),
+            -(attention_score_from_value(values[row["vuln_id"]]) or float(row["score"] or 0.0)),
+            -row["kev_present"],
+            -row["exploit_present"],
             -_epss_score(conn, row["vuln_id"]),
             -(float(row["cvss_score"] or 0.0)),
             row["published_at"] or "",
@@ -616,8 +630,7 @@ def top_hot(
 
     items: list[dict[str, Any]] = []
     for row in ranked:
-        value = _signal_value(row)
-        latest = _latest_signals(conn, row["vuln_id"])
+        value = values[row["vuln_id"]]
         display_score = attention_score_from_value(value)
         source_label = None
         for item in value.get("evidence_details", []) or []:
@@ -641,8 +654,8 @@ def top_hot(
                 "severity": row["severity"],
                 "cvss_score": row["cvss_score"],
                 "epss_score": _epss_score(conn, row["vuln_id"]),
-                "kev_present": "kev" in latest,
-                "exploit_present": "exploit" in latest,
+                "kev_present": bool(row["kev_present"]),
+                "exploit_present": bool(row["exploit_present"]),
                 "published_at": row["published_at"],
                 "first_seen_at": row["first_seen_at"],
                 "signal_provider": row["provider"],

@@ -9,6 +9,10 @@ Current task plan: `docs/ROADMAP.md`
 
 ---
 
+## Answering intelligence questions
+
+Use `python -m scripts.intel search` in the project environment to query the local mart. Use `--theme`, `--term`, `--id`, `--kind`, and explicit time bounds as appropriate. Retrieve supporting source observations with `python -m scripts.intel evidence SIGNAL_ID`. Check time_basis, match.basis, unindexed and feed_status before interpreting results. Run `python -m scripts.intel refresh` to catch up on stored signals. Return findings in the conversation. Export reports when requested.
+
 ## Absolute rules
 
 - **Prefer local sources first.** For any repository analysis, use local code, docs, and `db/core.db` before external web sources.

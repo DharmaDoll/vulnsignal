@@ -5,4 +5,9 @@
 .read sql/migrations/005_report_history.sql
 .read sql/migrations/006_vulnerabilities_first_seen_at.sql
 .read sql/migrations/007_first_seen_at_announcement_date.sql
+.read sql/migrations/008_recommendation_inputs.sql
+.read sql/migrations/009_feed_metrics.sql
+.read sql/migrations/010_intel_mart.sql
+.read sql/migrations/011_intel_cvss.sql
+.read sql/migrations/012_hot_projection.sql
 .read sql/indexes.sql

@@ -40,6 +40,7 @@ def migrate(db_path: Path = DB_PATH) -> int:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     try:
+        conn.execute("BEGIN IMMEDIATE")
         version = current_version(conn)
         migrations = sorted(MIGRATIONS_DIR.glob("*.sql"), key=migration_number)
         for migration in migrations:

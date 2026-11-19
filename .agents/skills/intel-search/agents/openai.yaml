@@ -1,0 +1,4 @@
+interface:
+  display_name: "VulnSignal Intel Search"
+  short_description: "Search local vulnerability events and verify their evidence"
+  default_prompt: "Use $intel-search to summarize this week's Java vulnerability events with supporting evidence."

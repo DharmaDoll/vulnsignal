@@ -53,7 +53,7 @@ class HotIntelTests(TestCase):
         self.assertIsNotNone(hit)
         self.assertNotEqual("active_exploitation", hit.evidence_type)
 
-    def test_classify_hit_uses_query_context_for_generic_blog_results(self) -> None:
+    def test_query_terms_do_not_turn_generic_blogs_into_evidence(self) -> None:
         hit = classify_hit(
             SearchHit(
                 query='"HTTP/2 Bomb" exploit OR PoC OR "active exploitation"',
@@ -63,9 +63,7 @@ class HotIntelTests(TestCase):
             )
         )
 
-        self.assertIsNotNone(hit)
-        self.assertEqual("active_exploitation", hit.evidence_type)
-        self.assertEqual("search", hit.source_type)
+        self.assertIsNone(hit)
 
     def test_hot_queries_are_title_based(self) -> None:
         queries = hot_queries(
@@ -281,7 +279,7 @@ class HotIntelTests(TestCase):
         self.assertIn("CVE-2026-42945", result["discovered_vuln_ids"])
         self.assertTrue(result["fetch_errors"])
 
-    def test_rss_items_fall_back_to_article_body_for_cves(self) -> None:
+    def test_rss_fallback_uses_article_metadata_only(self) -> None:
         rss_xml = """<?xml version="1.0" encoding="utf-8"?>
         <rss version="2.0">
           <channel>
@@ -298,7 +296,7 @@ class HotIntelTests(TestCase):
         <html>
           <head><title>Threat actors exploit critical flaw CVE-2026-42945</title></head>
           <body>
-            <p>The advisory references CVE-2026-42945 and public PoC coverage.</p>
+            <p>See related CVE-2026-68982 and public PoC coverage.</p>
           </body>
         </html>
         """
@@ -318,7 +316,7 @@ class HotIntelTests(TestCase):
             )
 
         self.assertEqual(1, len(items))
-        self.assertIn("CVE-2026-42945", items[0]["cve_ids"])
+        self.assertEqual(["CVE-2026-42945"], items[0]["cve_ids"])
 
 
 class FetchHotTests(TestCase):
@@ -335,7 +333,7 @@ class FetchHotTests(TestCase):
     def test_sync_profile_allows_explicit_override(self) -> None:
         captured: dict[str, int] = {}
 
-        def fake_discovery(results_per_query: int = 10, max_candidates: int = 20, query_terms=None, follow_article_links: bool = True, enable_duckduckgo: bool = True):
+        def fake_discovery(results_per_query: int = 10, max_candidates: int = 20, query_terms=None, follow_article_links: bool = True, enable_duckduckgo: bool = True, enable_hatena: bool = True):
             captured["results_per_query"] = results_per_query
             captured["max_candidates"] = max_candidates
             return {"search_queries": [], "query_count": 0, "result_count": 0, "discovered_vuln_ids": [], "search_hits": [], "urls": []}
@@ -345,6 +343,7 @@ class FetchHotTests(TestCase):
             return_value=None,
         ):
             fetch_hot.sync(
+                dry_run=True,
                 cutoff="2026-05-01T00:00:00+00:00",
                 profile="balanced",
                 search_cap=12,
@@ -558,31 +557,10 @@ class FetchHotTests(TestCase):
             self.assertEqual("hot", signal_row["signal_type"])
             self.assertIn('"vuln_ids": ["CVE-2026-42945"]', signal_row["value_json"])
 
-    def test_sync_can_fall_back_to_trivy_vuln_list_mirror_references(self) -> None:
+    def test_reference_alone_does_not_create_hot_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             core_db = tmp_path / "core.db"
-            source_dir = tmp_path / "vuln-list"
-            advisory_dir = source_dir / "ubuntu" / "2026"
-            advisory_dir.mkdir(parents=True)
-            (advisory_dir / "CVE-2026-49975.json").write_text(
-                """
-                {
-                  "Candidate": "CVE-2026-49975",
-                  "Description": "HTTP/2 Bomb denial of service issue",
-                  "Priority": "medium",
-                  "References": [
-                    "https://blog.calif.io/p/codex-discovered-a-hidden-http2-bomb"
-                  ],
-                  "Patches": {
-                    "apache2": {
-                      "jammy": {"Status": "released", "Note": "2.4.52-1ubuntu4.21"}
-                    }
-                  }
-                }
-                """.strip(),
-                encoding="utf-8",
-            )
             migrate(core_db)
             conn = sqlite3.connect(core_db)
             conn.row_factory = sqlite3.Row
@@ -590,7 +568,7 @@ class FetchHotTests(TestCase):
                 upsert_vulnerability(
                     conn,
                     vuln_id="CVE-2026-49975",
-                    source="trivy",
+                    source="cve_program",
                     title="HTTP/2 Bomb denial of service issue",
                     summary="HTTP/2 Bomb denial of service issue",
                     severity="MEDIUM",
@@ -598,85 +576,22 @@ class FetchHotTests(TestCase):
                     published_at="2026-06-03T00:00:00Z",
                     first_seen_at="2026-06-03T00:00:00Z",
                 )
+                conn.execute(
+                    "INSERT INTO signals (vuln_id, signal_type, provider, value_json, observed_at) VALUES (?,?,?,?,?)",
+                    ("CVE-2026-49975", "enrichment", "CVE Program",
+                     '{"references":["https://blog.calif.io/p/codex-discovered-a-hidden-http2-bomb"]}',
+                     "2026-06-03T00:00:00Z"),
+                )
                 conn.commit()
             finally:
                 conn.close()
 
-            def fake_collect(
-                vuln_id: str,
-                title: str | None = None,
-                summary: str | None = None,
-                queries_per_vuln: int = 3,
-                results_per_query: int = 10,
-                hits=None,
+            with patch("sync.hot_intel.search_duckduckgo", return_value=[]), patch(
+                "sync.hot_intel.search_hatena", return_value=[]
             ):
-                if hits is None:
-                    return None
-                return {
-                    "score": 0.76,
-                    "query_count": 2,
-                    "search_queries": ['"HTTP/2 Bomb" exploit OR PoC OR "active exploitation"'],
-                    "result_count": len(hits),
-                    "evidence_count": 1,
-                    "independent_sources": 1,
-                    "evidence_types": ["public_poc"],
-                    "source_types": ["search"],
-                    "urls": [hit.url for hit in hits],
-                    "search_hits": [
-                        {
-                            "query": hit.query,
-                            "title": hit.title,
-                            "url": hit.url,
-                            "domain": hit.domain,
-                        }
-                        for hit in hits
-                    ],
-                    "evidence_details": [
-                        {
-                            "evidence_type": "public_poc",
-                            "source_type": "search",
-                            "weight": 0.6,
-                            "url": hit.url,
-                            "title": hit.title,
-                            "domain": hit.domain,
-                            "query": hit.query,
-                            "matched_terms": ["exploit"],
-                        }
-                        for hit in hits
-                    ],
-                    "headline": "Codex Discovered a Hidden HTTP/2 Bomb",
-                    "discovery_query_count": 0,
-                    "discovery_queries": [],
-                    "discovery_result_count": 0,
-                    "discovery_hits": [],
-                    "discovered_vuln_ids": ["CVE-2026-49975"],
-                }
-
-            with patch("sync.fetch_hot.TRIVY_VULN_LIST_DEFAULT_DIR", source_dir), patch(
-                "sync.fetch_hot.collect_hot_evidence_for_vuln", side_effect=fake_collect
-            ):
-                result = fetch_hot.sync(
-                    cutoff="2026-05-01T00:00:00+00:00",
-                    vuln_ids=["CVE-2026-49975"],
-                    db_path=core_db,
-                )
-
+                result = fetch_hot.sync(vuln_ids=["CVE-2026-49975"], db_path=core_db)
             self.assertEqual(1, result.rows_fetched)
-            self.assertEqual(1, result.rows_written)
-
-            conn = connect(core_db)
-            conn.row_factory = sqlite3.Row
-            try:
-                signal_row = conn.execute(
-                    "SELECT signal_type, provider, score, value_json FROM signals WHERE vuln_id = ? AND signal_type = 'hot' ORDER BY id DESC LIMIT 1",
-                    ("CVE-2026-49975",),
-                ).fetchone()
-            finally:
-                conn.close()
-
-            self.assertIsNotNone(signal_row)
-            self.assertEqual("hot", signal_row["signal_type"])
-            self.assertIn("codex-discovered-a-hidden-http2-bomb", signal_row["value_json"])
+            self.assertEqual(0, result.rows_written)
 
     def test_sync_logs_error_when_some_candidates_fail(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -805,9 +720,10 @@ class HotListTests(TestCase):
                         "independent_sources": 1,
                         "evidence_types": ["news_mention"],
                         "source_types": ["news"],
-                        "urls": ["https://example.invalid/old"],
+                        "urls": ["https://example.invalid/old/CVE-2026-9999"],
                         "search_hits": [],
-                        "evidence_details": [],
+                        "evidence_details": [{"title": "older observation",
+                                              "url": "https://example.invalid/old/CVE-2026-9999"}],
                         "headline": "older observation",
                         "discovery_query_count": 1,
                         "discovery_queries": ["\"Example Hot Vulnerability\""],
@@ -832,9 +748,10 @@ class HotListTests(TestCase):
                         "independent_sources": 2,
                         "evidence_types": ["active_exploitation", "vendor_advisory"],
                         "source_types": ["vendor", "news"],
-                        "urls": ["https://example.invalid/new"],
+                        "urls": ["https://example.invalid/new/CVE-2026-9999"],
                         "search_hits": [],
-                        "evidence_details": [],
+                        "evidence_details": [{"title": "newer observation actively exploited",
+                                              "url": "https://example.invalid/new/CVE-2026-9999"}],
                         "headline": "newer observation",
                         "discovery_query_count": 1,
                         "discovery_queries": ["\"Example Hot Vulnerability\""],
@@ -869,9 +786,10 @@ class HotListTests(TestCase):
                         "independent_sources": 1,
                         "evidence_types": ["news_mention"],
                         "source_types": ["news"],
-                        "urls": ["https://example.invalid/other"],
+                        "urls": ["https://example.invalid/other/CVE-2026-9998"],
                         "search_hits": [],
-                        "evidence_details": [],
+                        "evidence_details": [{"title": "lower hot score but higher CVSS",
+                                              "url": "https://example.invalid/other/CVE-2026-9998"}],
                         "headline": "lower hot score but higher CVSS",
                         "discovery_query_count": 1,
                         "discovery_queries": ["\"Another Hot Vulnerability\""],
@@ -889,10 +807,10 @@ class HotListTests(TestCase):
 
             self.assertEqual(2, len(rows))
             self.assertEqual("CVE-2026-9999", rows[0]["vuln_id"])
-            self.assertEqual("newer observation", rows[0]["headline"])
+            self.assertEqual("newer observation actively exploited", rows[0]["headline"])
             self.assertEqual("CVE-2026-9998", rows[1]["vuln_id"])
             self.assertEqual("lower hot score but higher CVSS", rows[1]["headline"])
-            self.assertAlmostEqual(0.87, rows[0]["hot_score"], places=2)
+            self.assertAlmostEqual(0.71, rows[0]["hot_score"], places=2)
             self.assertIn("kev_present", rows[0])
             self.assertIn("exploit_present", rows[0])
             self.assertIn("epss_score", rows[0])
@@ -934,9 +852,10 @@ class HotListTests(TestCase):
                         "independent_sources": 2,
                         "evidence_types": ["active_exploitation"],
                         "source_types": ["news"],
-                        "urls": ["https://example.invalid/older"],
+                        "urls": ["https://example.invalid/older/CVE-2026-9996"],
                         "search_hits": [],
-                        "evidence_details": [],
+                        "evidence_details": [{"title": "older high score",
+                                              "url": "https://example.invalid/older/CVE-2026-9996"}],
                         "headline": "older high score",
                         "discovery_query_count": 1,
                         "discovery_queries": ["\"Stale Hot Signal Sample\""],
@@ -961,9 +880,10 @@ class HotListTests(TestCase):
                         "independent_sources": 1,
                         "evidence_types": ["news_mention"],
                         "source_types": ["news"],
-                        "urls": ["https://example.invalid/newer"],
+                        "urls": ["https://example.invalid/newer/CVE-2026-9996"],
                         "search_hits": [],
-                        "evidence_details": [],
+                        "evidence_details": [{"title": "newer low score",
+                                              "url": "https://example.invalid/newer/CVE-2026-9996"}],
                         "headline": "newer low score",
                         "discovery_query_count": 1,
                         "discovery_queries": ["\"Stale Hot Signal Sample\""],
@@ -1089,9 +1009,10 @@ class HotListTests(TestCase):
                         "independent_sources": 1,
                         "evidence_types": ["news_mention"],
                         "source_types": ["news"],
-                        "urls": ["https://example.invalid/cli"],
+                        "urls": ["https://example.invalid/cli/CVE-2026-9997"],
                         "search_hits": [],
-                        "evidence_details": [],
+                        "evidence_details": [{"title": "cli label sample",
+                                              "url": "https://example.invalid/cli/CVE-2026-9997"}],
                         "headline": "cli label sample",
                         "discovery_query_count": 1,
                         "discovery_queries": ["\"CLI Label Sample\""],
@@ -1121,3 +1042,85 @@ class HotListTests(TestCase):
             output = buf.getvalue()
             self.assertIn("hot_reference [reference-only]", output)
             self.assertIn("vuln_id\tsignal_score\tobserved_at\tsource\tseverity\ttitle\tsource_label\tquery_count\tsearch_queries\tsearch_budget\tresult_count\tevidence_count\tindependent_sources\tevidence_types\tsource_types\turls\theadline\tdiscovery_query_count\tdiscovery_queries\tdiscovery_result_count\tdiscovery_hits\tdiscovered_vuln_ids", output)
+
+
+def test_direct_hits_require_the_target_and_a_positive_article_claim():
+    from sync.hot_intel import collect_hot_evidence_for_vuln
+
+    vuln = "CVE-2026-9999"
+    query = f'{vuln} PoC active exploitation'
+    titles = ["AI checklist for CVE-2026-99990", f"There is no PoC for {vuln}",
+              f"{vuln} exploitation risk", f"Public PoC for {vuln} and CVE-2026-9876",
+              f"Public PoC for {vuln}"]
+    hits = [SearchHit(query, title, f"https://thehackernews.com/{i}", "thehackernews.com")
+            for i, title in enumerate(titles)]
+    data = collect_hot_evidence_for_vuln(vuln, hits=hits)
+    assert {d["title"]: d["evidence_type"] for d in data["evidence_details"]} == {
+        titles[1]: "news_mention", titles[2]: "news_mention", titles[3]: "news_mention", titles[4]: "public_poc",
+    }
+
+
+def test_discovery_keeps_evidence_after_tenth_hit_and_respects_cap():
+    items = [{"title": f"CVE-2026-{n}", "url": f"https://example.org/{n}", "cve_ids": [f"CVE-2026-{n}"]}
+             for n in range(1000, 1012)]
+    with patch("sync.hot_intel.fetch_rss_feed_items", return_value=items), patch(
+        "sync.hot_intel.search_duckduckgo", side_effect=AssertionError
+    ):
+        discovery = discover_hot_candidates(max_candidates=12)
+    assert len(discovery["discovered_vuln_ids"]) == 12
+    assert "CVE-2026-1011" in fetch_hot._candidate_hits(discovery["search_hits"])
+
+
+def test_denials_after_the_term_and_hypothetical_exploitation():
+    for headline in ("PoC is not available", "Attackers could exploit this; it may be actively exploited"):
+        hit = SearchHit("PoC", f"CVE-2026-1234 {headline}", "https://www.securityweek.com/item", "www.securityweek.com")
+        assert classify_hit(hit).evidence_type == "news_mention"
+
+
+def test_discovery_shares_slots_between_feeds_and_bounds_article_fetches():
+    feeds = (("A", "https://a.test/feed"), ("B", "https://b.test/feed"))
+    def entries(name, url, **options):
+        assert not options["follow_article_links"]
+        start = 1000 if name == "A" else 2000
+        return [{"feed": name, "url": f"{url}/{i}", "cve_ids": [f"CVE-2026-{start+i}"] if i < 2 else [],
+                 "summary": ""} for i in range(5)]
+    with patch("sync.hot_intel.RSS_FEEDS", feeds), patch("sync.hot_intel.fetch_rss_feed_items", side_effect=entries), patch(
+        "sync.hot_intel.fetch_text", return_value="<aside>CVE-2026-3456</aside>"
+    ) as pages:
+        capped = discover_hot_candidates(max_candidates=2, enable_duckduckgo=False, enable_hatena=False)
+        assert capped["discovered_vuln_ids"] == ["CVE-2026-1000", "CVE-2026-2000"]
+        pages.assert_not_called()
+        expanded = discover_hot_candidates(results_per_query=2, enable_duckduckgo=False, enable_hatena=False)
+        assert pages.call_count == 2
+        assert "CVE-2026-3456" not in expanded["discovered_vuln_ids"]
+
+
+def test_rss_ingest_to_mart_uses_article_attribution(tmp_path):
+    from scripts.intel import refresh, search
+
+    db = tmp_path / "core.db"
+    migrate(db)
+    good, unrelated = "CVE-2026-114938", "CVE-2026-68982"
+    with connect(db) as conn:
+        for vuln in (good, unrelated):
+            upsert_vulnerability(conn, vuln_id=vuln, source="cve_program", title=vuln)
+    articles = f"""<rss><channel>
+      <item><title>Java4Shell {good}</title><link>https://thehackernews.com/java</link>
+        <pubDate>Wed, 18 Nov 2026 11:55:49 GMT</pubDate></item>
+      <item><title>AI Pentesting Checklist</title><link>https://thehackernews.com/checklist</link></item>
+    </channel></rss>"""
+    def fetch(url, headers):
+        if url.endswith("/feed"):
+            return articles
+        assert url.endswith("/checklist")
+        return f"<html><title>Checklist</title><aside>Related: {unrelated}</aside></html>"
+    with patch("sync.hot_intel.RSS_FEEDS", (("News", "https://thehackernews.com/feed"),)), patch(
+        "sync.hot_intel.fetch_text", side_effect=fetch
+    ), patch("sync.hot_intel.search_duckduckgo", return_value=[]), patch("sync.hot_intel.search_hatena", return_value=[]):
+        for expected in (1, 0):
+            result = fetch_hot.sync(cutoff="2026-11-12", db_path=db)
+            assert (result.rows_fetched, result.rows_written) == (1, expected)
+    refresh(db)
+    items = search(db, kind="attention", until="2100-01-01")["items"]
+    assert [i["vuln_id"] for i in items] == [good]
+    assert items[0]["source_date"].startswith("2026-11-18T11:55:49")
