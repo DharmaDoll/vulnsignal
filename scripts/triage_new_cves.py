@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
 
 from db.migrate import migrate
 from sync.common import DB_PATH, connect, utc_now
+from sync.hot_intel import reviewed_hot_value
 
 
 TRIAGE_SCHEMA_VERSION = 1
@@ -192,7 +193,7 @@ def _latest_signal_context(conn, vuln_ids: list[str]) -> dict[str, dict[str, Any
                    ORDER BY observed_at DESC, id DESC
                  ) AS rn
           FROM signals
-          WHERE vuln_id IN ({placeholders})
+          WHERE vuln_id IN ({placeholders}) AND id NOT IN (SELECT id FROM dismissed_hot)
         )
         WHERE rn = 1
         ORDER BY vuln_id, signal_type
@@ -208,6 +209,9 @@ def _latest_signal_context(conn, vuln_ids: list[str]) -> dict[str, dict[str, Any
             "observed_at": row["observed_at"],
         }
         if row["signal_type"] == "hot":
+            if row["provider"] == "Web Hot Intel":
+                value = reviewed_hot_value(row["vuln_id"], value)
+                evidence["score"] = value["score"]
             evidence["summary"] = {
                 "attention_score": value.get("attention_score") or value.get("score"),
                 "domains": value.get("domains") or value.get("top_domains") or [],
@@ -382,6 +386,12 @@ def build_report(
     migrate(db_path)
     conn = connect(db_path)
     try:
+        conn.execute("BEGIN")
+        conn.execute("CREATE TEMP TABLE dismissed_hot(id INTEGER PRIMARY KEY)")
+        web_hot = conn.execute("SELECT id,vuln_id,value_json FROM signals WHERE provider='Web Hot Intel' AND signal_type='hot'")
+        conn.executemany("INSERT INTO dismissed_hot VALUES(?)", (
+            (row["id"],) for row in web_hot if not reviewed_hot_value(row["vuln_id"], _parse_json(row["value_json"]))
+        ))
         filters = " AND ".join(
             [
                 "lower(coalesce(v.title, '') || ' ' || coalesce(v.summary, '')) NOT LIKE ?"
@@ -398,7 +408,7 @@ def build_report(
                        PARTITION BY vuln_id, signal_type
                        ORDER BY observed_at DESC, id DESC
                      ) AS rn
-              FROM signals
+              FROM signals WHERE id NOT IN (SELECT id FROM dismissed_hot)
             ),
             flags AS (
               SELECT
@@ -492,6 +502,7 @@ def build_report(
             **report,
             "context_review": {
                 "enabled": True,
+                "input": payload,
                 "status": "error",
                 "error": str(exc),
             },
@@ -500,7 +511,10 @@ def build_report(
                 "Context review failed; report fell back to deterministic triage only.",
             ],
         }
-    return _apply_context_reviews(report, response)
+    reviewed = _apply_context_reviews(report, response)
+    reviewed["context_review"]["input"] = payload
+    reviewed["context_review"]["output"] = response
+    return reviewed
 
 
 def _print_summary(report: dict[str, Any]) -> None:

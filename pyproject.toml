@@ -3,6 +3,9 @@ name = "vulnsignal"
 version = "0.0.0"
 description = "Lean vulnerability intelligence platform"
 requires-python = ">=3.12"
+dependencies = [
+    "cvss>=3.3,<4",
+]
 
 [dependency-groups]
 dev = [
@@ -10,3 +13,6 @@ dev = [
     "secretstorage>=3.5.0",
 ]
 
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

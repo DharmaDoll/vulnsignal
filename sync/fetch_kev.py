@@ -5,6 +5,7 @@ import argparse
 from typing import Any
 
 from sync.common import (
+    run_measured,
     FetchResult,
     append_signal,
     connect,
@@ -92,7 +93,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--cache-only", action="store_true")
     args = parser.parse_args()
-    result = sync(limit=args.limit, dry_run=args.dry_run, cache_only=args.cache_only)
+    result = run_measured(FEED, sync, limit=args.limit, dry_run=args.dry_run, cache_only=args.cache_only)
     print(result)
 
 

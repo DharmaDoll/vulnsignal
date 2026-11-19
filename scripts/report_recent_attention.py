@@ -29,7 +29,6 @@ FEED_WATERMARKS = (
     "epss",
     "hot",
     "ghsa",
-    "trivy_vuln_list",
     "go-exploitdb",
     "vulnrichment",
 )

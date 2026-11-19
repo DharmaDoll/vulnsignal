@@ -15,10 +15,10 @@ load_state() {
 }
 
 write_state() {
-  printf 'CVE_PROGRAM_REF=%s\n' "$1" > "$STATE_FILE"
-  printf 'GHSA_REF=%s\n' "$2" >> "$STATE_FILE"
-  printf 'TRIVY_VULN_LIST_REF=%s\n' "$3" >> "$STATE_FILE"
-  printf 'VULNRICHMENT_REF=%s\n' "$4" >> "$STATE_FILE"
+  printf 'CVE_PROGRAM_REF=%s\n' "$1" > "$STATE_FILE.tmp"
+  printf 'GHSA_REF=%s\n' "$2" >> "$STATE_FILE.tmp"
+  printf 'VULNRICHMENT_REF=%s\n' "$3" >> "$STATE_FILE.tmp"
+  mv "$STATE_FILE.tmp" "$STATE_FILE"
 }
 
 git_head() {
@@ -40,25 +40,20 @@ if [ "${SKIP_MIRROR_REFRESH:-0}" != "1" ]; then
   fi
 fi
 
-if [ -z "${CVE_PROGRAM_REF:-}" ]; then
-  CVE_PROGRAM_REF="$(git -C data/cvelistv5-mirror rev-parse HEAD@{1})"
-fi
-if [ -z "${GHSA_REF:-}" ]; then
-  GHSA_REF="$(git -C data/github-advisory-database-mirror rev-parse HEAD@{1})"
-fi
-if [ -z "${TRIVY_VULN_LIST_REF:-}" ]; then
-  TRIVY_VULN_LIST_REF="$(git -C data/aquasecurity-vuln-list-mirror rev-parse HEAD@{1})"
-fi
-if [ -z "${VULNRICHMENT_REF:-}" ]; then
-  VULNRICHMENT_REF="$(git -C data/vulnrichment-mirror rev-parse HEAD@{1})"
-fi
+ingest_mirror() {
+  local module="$1" ref="$2"
+  if [ -n "$ref" ]; then
+    python3 -m "$module" --changed-since-ref "$ref" --min-year "${MIN_CHANGED_YEAR:-2015}"
+  else
+    python3 -m "$module" --min-year "$MIN_YEAR"
+  fi
+}
 
-python3 -m sync.fetch_cve_program --min-year "$MIN_YEAR" --changed-since-ref "$CVE_PROGRAM_REF"
+ingest_mirror sync.fetch_cve_program "${CVE_PROGRAM_REF:-}"
 python3 -m sync.fetch_kev
 python3 -m sync.fetch_epss
-python3 -m sync.fetch_ghsa --min-year "$MIN_YEAR" --changed-since-ref "$GHSA_REF"
-python3 -m sync.fetch_trivy_vuln_list --min-year "$MIN_YEAR" --changed-since-ref "$TRIVY_VULN_LIST_REF"
-python3 -m sync.fetch_vulnrichment --min-year "$MIN_YEAR" --changed-since-ref "$VULNRICHMENT_REF"
+ingest_mirror sync.fetch_ghsa "${GHSA_REF:-}"
+ingest_mirror sync.fetch_vulnrichment "${VULNRICHMENT_REF:-}"
 
 if [ -f "db/exploit.db" ]; then
   python3 -m sync.fetch_exploitdb --db db/exploit.db --min-year "$MIN_YEAR"
@@ -66,10 +61,11 @@ else
   printf '%s\n' "skip: db/exploit.db not found"
 fi
 
-python3 -m sync.feed_quality
+if [ "${SKIP_FEED_QUALITY:-0}" != "1" ]; then
+  python3 -m sync.feed_quality
+fi
 
 write_state \
   "$(git_head data/cvelistv5-mirror)" \
   "$(git_head data/github-advisory-database-mirror)" \
-  "$(git_head data/aquasecurity-vuln-list-mirror)" \
   "$(git_head data/vulnrichment-mirror)"

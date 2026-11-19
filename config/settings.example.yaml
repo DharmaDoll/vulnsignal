@@ -7,11 +7,11 @@ ghsa:
   type: reviewed
 
 trivy:
-  enabled: true
+  enabled: false
   source: json
 
 trivy_db:
-  enabled: true
+  enabled: false
   path: db/trivy_cache.db
   expected_schema_version: 2
 

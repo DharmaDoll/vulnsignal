@@ -140,6 +140,8 @@ def _init_db(path: Path) -> None:
                                     "source_type": "search",
                                     "weight": 0.75,
                                     "domain": "example.test",
+                                    "url": "https://example.test/poc",
+                                    "title": "Public PoC for CVE-2026-0002",
                                 }
                             ],
                         }

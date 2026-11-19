@@ -1,0 +1,5 @@
+{
+  "React": {"terms": ["React", "react-dom"], "exclude": []},
+  "Java": {"terms": ["Java", "OpenJDK", "JDK"], "exclude": []},
+  "PostgreSQL": {"terms": ["PostgreSQL", "Postgres"], "exclude": []}
+}

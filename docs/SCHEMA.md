@@ -206,3 +206,23 @@ CREATE INDEX idx_fetch_log_feed       ON fetch_log(feed, attempted_at DESC, id D
 CREATE INDEX idx_report_history_key_vuln ON report_history(report_key, vuln_id);
 CREATE INDEX idx_report_history_reported_at ON report_history(reported_at DESC);
 ```
+
+### epss_batch
+
+Migration 008 records the date, SHA-256 digest and row count of the last fully applied daily EPSS file in the same transaction as its scores. Partial imports invalidate the checkpoint when they change scores. An expression index on signal observation time supports calendar-period lookups.
+
+### feed_metrics
+
+Migration 009 links elapsed seconds, rows read and downloaded HTTP response-body bytes to the CLI run’s fetch_log ID. Git transport, subprocess traffic, headers and failed transfers are outside the HTTP byte counter. Historical rows without measurements remain unknown.
+
+### Searchable intelligence mart (migration 010)
+
+`intel_evidence` links eligible source observations to normalized vulnerability IDs and attributed titles. SQLite FTS5 indexes product/package terms separately from textual mentions in `intel_terms`. `intel_event` groups repeat observations by vulnerability, event type and identity and references a supporting signal. `intel_state` tracks the last processed signal ID. Index rows and the cursor commit in the same transaction. The original signals provide the durable evidence trail. Search queries expose source dates, observation times and online ingestion freshness.
+
+### CVSS observations (migration 011)
+
+`intel_cvss` stores the base score for each eligible source signal, keyed by signal ID. The series index groups vulnerability, provider, advisory and CVSS version in observation order. `intel_cvss_state` checkpoints its historical backfill independently of the text index. Derived `cvss_increase` and `cvss_decrease` events point to the changed observation. An out-of-order insertion also updates the affected successor's derived event. Raw evidence remains append-only. EPSS is joined from `epss_current` by vulnerability ID at query time.
+
+### Hot evidence projection (migration 012)
+
+`intel_state.hot_rule_version` records the article matching rules applied by the mart. The first `scripts.intel refresh` after migration replays indexed Web Hot Intel observations in signal ID order. It replaces their derived attention events and search terms and checkpoints the version in one transaction. A subsequent refresh resumes incremental indexing.

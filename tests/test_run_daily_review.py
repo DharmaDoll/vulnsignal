@@ -5,17 +5,17 @@ import io
 import json
 import sqlite3
 import tempfile
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import call, patch
 
 
 def _load_daily_review_module():
-    module_path = Path(__file__).resolve().parents[1] / "scripts" / "run_daily_review.py"
-    spec = importlib.util.spec_from_file_location("run_daily_review_script", module_path)
+    module_path = Path(__file__).resolve().parents[1] / "scripts" / "refresh_intelligence.py"
+    spec = importlib.util.spec_from_file_location("refresh_intelligence_script", module_path)
     if spec is None or spec.loader is None:
-        raise RuntimeError("unable to load scripts/run_daily_review.py")
+        raise RuntimeError("unable to load scripts/refresh_intelligence.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -79,6 +79,26 @@ class DailyReviewWorkflowTests(TestCase):
 
         self.assertEqual("2026-06-30T123456Z.json", path.name)
         self.assertEqual(report, saved)
+
+    def test_run_command_streams_output_while_capturing_tails(self) -> None:
+        module = _load_daily_review_module()
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            result = module.run_command(
+                [
+                    module.sys.executable,
+                    "-c",
+                    "import sys; print('hello stdout'); print('hello stderr', file=sys.stderr)",
+                ]
+            )
+
+        self.assertEqual(0, result["returncode"])
+        self.assertIn("hello stdout", stdout.getvalue())
+        self.assertIn("hello stderr", stderr.getvalue())
+        self.assertIn("hello stdout", result["stdout_tail"])
+        self.assertIn("hello stderr", result["stderr_tail"])
 
     def test_build_daily_review_runs_triage_and_deep_dive_for_watch_now(self) -> None:
         module = _load_daily_review_module()
@@ -235,7 +255,7 @@ class DailyReviewWorkflowTests(TestCase):
         run_command_mock.assert_has_calls(
             [
                 call([str(module.ROOT / "scripts" / "refresh_all_sources.sh")]),
-                call([str(module.ROOT / "scripts" / "ingest_recent_core_db.sh")], env={"SKIP_MIRROR_REFRESH": "1"}),
+                call([str(module.ROOT / "scripts" / "ingest_recent_core_db.sh")], env={"SKIP_MIRROR_REFRESH": "1", "SKIP_FEED_QUALITY": "1"}),
                 call([module.sys.executable, "-m", "sync.fetch_hot"]),
             ]
         )

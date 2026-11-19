@@ -5,6 +5,7 @@ import argparse
 import json
 import re
 import sys
+from contextlib import closing
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -15,16 +16,10 @@ if str(ROOT) not in sys.path:
 
 from app import skills
 from db.migrate import migrate
-from sync.common import DB_PATH, utc_now
+from sync.hot_intel import reviewed_hot_value
+from sync.common import DB_PATH, connect, utc_now
 from sync.exploit_adapter import DEFAULT_DB_PATH as DEFAULT_EXPLOIT_DB_PATH, get_exploits
-from sync.trivy_adapter import (
-    TRIVY_VULN_LIST_DEFAULT_DIR,
-    load_advisories_for_vuln_id_from_directory,
-)
-
-
-DEFAULT_TARGETS = ["alpine", "debian", "ubuntu", "ghsa", "glad", "go", "osv", "seal"]
-DEEP_DIVE_SCHEMA_VERSION = 1
+DEEP_DIVE_SCHEMA_VERSION = 2
 
 
 def _sentences(text: str | None) -> list[str]:
@@ -132,7 +127,7 @@ def build_impact_template(
             "cvss_score": vuln.get("cvss_score"),
             "severity": vuln.get("severity"),
             "signals": signals,
-            "trivy_vuln_list_rows": len(advisories),
+            "package_advisories_rows": len(advisories),
             "go_exploitdb_rows": len(exploits),
             "hot_rows": len(hot_rows),
             "references": references[:10],
@@ -140,12 +135,49 @@ def build_impact_template(
     }
 
 
+def source_context(vuln_id, db_path):
+    """Build current details from individually attributed observations."""
+    with closing(connect(db_path)) as conn:
+        rows = conn.execute("""
+            SELECT signal_type, provider, value_json, observed_at, score FROM signals
+            WHERE vuln_id=? AND provider IN ('CVE Program','GitHub Advisory Database','CISA KEV',
+                  'CISA Vulnrichment','Web Hot Intel','go-exploitdb')
+            ORDER BY observed_at DESC,id DESC
+        """, (vuln_id,))
+        vulnerability = {"vuln_id": vuln_id}
+        signals = {}
+        packages = {}
+        for row in rows:
+            value = json.loads(row["value_json"] or "{}")
+            provider = row["provider"]
+            if provider == "CISA Vulnrichment" and not value.get("source_fields_version"):
+                continue
+            kind = row["signal_type"]
+            if kind == "hot":
+                value = reviewed_hot_value(vuln_id, value)
+                if not value:
+                    continue
+            signals.setdefault(kind, {**dict(row), "value_json": value, "score": value["score"] if kind == "hot" else row["score"]})
+            for field in ("title", "summary", "published_at"):
+                if value.get(field):
+                    vulnerability.setdefault(field, value[field])
+            if kind == "package_advisory":
+                key = (value.get("ghsa_id"), value.get("ecosystem"), value.get("package_name"))
+                packages.setdefault(key, value)
+            if value.get("cvss_score") is not None:
+                trust = {"GitHub Advisory Database": 3, "CISA Vulnrichment": 2, "CVE Program": 1}
+                if trust.get(provider, 0) > trust.get(vulnerability.get("cvss_source"), 0):
+                    vulnerability.update(cvss_score=value["cvss_score"], cvss_source=provider,
+                                         severity=value.get("severity"))
+    if not signals:
+        raise RuntimeError(f"no eligible evidence in core.db for {vuln_id}")
+    return {"vulnerability": vulnerability, "signals": signals, "has_exploit": "exploit" in signals}, list(packages.values())
+
+
 def build_report(
     vuln_id: str,
     db_path: Path = DB_PATH,
-    mirror_dir: Path = TRIVY_VULN_LIST_DEFAULT_DIR,
     exploit_db: Path = DEFAULT_EXPLOIT_DB_PATH,
-    targets: list[str] | None = None,
     refresh_hot: bool = False,
 ) -> dict[str, Any]:
     migrate(db_path)
@@ -153,21 +185,9 @@ def build_report(
     if refresh_hot:
         hot_refresh_result = skills.refresh_hot_for_vuln_ids([vuln_id], db_path=db_path, simple=True)
 
-    core = skills.find_vuln(vuln_id, db_path=db_path)
-    if core is None:
-        raise RuntimeError(f"vulnerability not found in core.db: {vuln_id}")
-
-    advisories = [
-        asdict(record)
-        for record in load_advisories_for_vuln_id_from_directory(
-            mirror_dir,
-            vuln_id,
-            utc_now(),
-            targets=targets or DEFAULT_TARGETS,
-        )
-    ]
-    exploits = [asdict(record) for record in get_exploits(vuln_id, db_path=exploit_db)]
-    hot_rows = skills.top_hot(limit=5, db_path=db_path, vuln_ids=[vuln_id])
+    core, advisories = source_context(vuln_id, db_path)
+    exploits = [asdict(record) for record in get_exploits(vuln_id, db_path=exploit_db)] if exploit_db.is_file() else []
+    hot_rows = [core["signals"]["hot"]] if "hot" in core["signals"] else []
     impact = build_impact_template(core, advisories, exploits, hot_rows)
 
     return {
@@ -177,11 +197,10 @@ def build_report(
         "generated_at": utc_now(),
         "sources": {
             "core_db": str(db_path),
-            "vuln_list_mirror": str(mirror_dir),
             "exploit_db": str(exploit_db),
         },
         "core": core,
-        "trivy_vuln_list": advisories,
+        "package_advisories": advisories,
         "go_exploitdb": exploits,
         "hot": hot_rows,
         "hot_refresh": hot_refresh_result,
@@ -195,23 +214,13 @@ def main() -> None:
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of a short text summary.")
     parser.add_argument("--refresh-hot", action="store_true", help="Refresh hot intel for the vuln before reading it.")
     parser.add_argument("--db-path", type=Path, default=DB_PATH)
-    parser.add_argument("--mirror-dir", type=Path, default=TRIVY_VULN_LIST_DEFAULT_DIR)
     parser.add_argument("--exploit-db", type=Path, default=DEFAULT_EXPLOIT_DB_PATH)
-    parser.add_argument(
-        "--target",
-        action="append",
-        dest="targets",
-        default=[],
-        help="Limit Trivy vuln-list lookup to a specific target family. Can be repeated.",
-    )
     args = parser.parse_args()
 
     report = build_report(
         vuln_id=args.vuln_id,
         db_path=args.db_path,
-        mirror_dir=args.mirror_dir,
         exploit_db=args.exploit_db,
-        targets=args.targets or None,
         refresh_hot=args.refresh_hot,
     )
 
@@ -222,7 +231,7 @@ def main() -> None:
     print(f"vuln_id: {report['vuln_id']}")
     print(f"core_title: {report['core']['vulnerability'].get('title')}")
     print(f"signals: {', '.join(sorted(report['core']['signals'].keys())) or '-'}")
-    print(f"trivy_vuln_list_rows: {len(report['trivy_vuln_list'])}")
+    print(f"package_advisories_rows: {len(report['package_advisories'])}")
     print(f"go_exploitdb_rows: {len(report['go_exploitdb'])}")
     print(f"hot_rows: {len(report['hot'])}")
     print(f"priority: {report['impact']['priority']}")

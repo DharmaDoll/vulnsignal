@@ -7,7 +7,6 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from sync.exploit_adapter import ExploitRecord
-from sync.trivy_adapter import AdvisoryRecord
 
 
 def _load_deep_dive_module():
@@ -26,24 +25,9 @@ class DeepDiveContractTests(TestCase):
 
         core_stub = {
             "vulnerability": {"title": "Sample title"},
-            "signals": {"kev": {"observed_at": "2026-06-26T00:00:00Z"}},
+            "signals": {"kev": {"observed_at": "2026-06-26T00:00:00Z"}, "hot": {}},
             "has_exploit": True,
         }
-        advisory = AdvisoryRecord(
-            vuln_id="CVE-2026-31431",
-            source="ubuntu",
-            ecosystem="ubuntu",
-            package_name="linux",
-            affected_versions=["released:jammy:5.15.0-179.189"],
-            fixed_version="7.0~rc7, 6.8.y, 6.17.y",
-            severity="high",
-            observed_at="2026-06-26T00:00:00Z",
-            published_at="2026-04-22T09:16:00Z",
-            source_path="/tmp/source.json",
-            title="Sample advisory",
-            summary="Sample advisory summary",
-            references=["https://example.invalid/advisory"],
-        )
         exploit = ExploitRecord(
             vuln_id="CVE-2026-31431",
             source="go-exploitdb",
@@ -56,34 +40,29 @@ class DeepDiveContractTests(TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "core.db"
-            mirror_dir = Path(tmp) / "mirror"
             exploit_db = Path(tmp) / "exploit.db"
 
+            exploit_db.touch()
             with (
                 patch.object(module, "migrate", return_value=None),
                 patch.object(module, "utc_now", return_value="2026-06-26T00:00:00Z"),
-                patch.object(module.skills, "find_vuln", return_value=core_stub),
-                patch.object(module.skills, "top_hot", return_value=[{"vuln_id": "CVE-2026-31431"}]),
-                patch.object(module, "load_advisories_for_vuln_id_from_directory", return_value=[advisory]),
+                patch.object(module, "source_context", return_value=(core_stub, [])),
                 patch.object(module, "get_exploits", return_value=[exploit]),
             ):
                 report = module.build_report(
                     vuln_id="CVE-2026-31431",
                     db_path=db_path,
-                    mirror_dir=mirror_dir,
                     exploit_db=exploit_db,
                 )
 
-        self.assertEqual(1, report["schema_version"])
+        self.assertEqual(2, report["schema_version"])
+        self.assertEqual([], report["package_advisories"])
         self.assertEqual("deep_dive", report["kind"])
         self.assertEqual("CVE-2026-31431", report["vuln_id"])
         self.assertEqual("2026-06-26T00:00:00Z", report["generated_at"])
         self.assertEqual(str(db_path), report["sources"]["core_db"])
-        self.assertEqual(str(mirror_dir), report["sources"]["vuln_list_mirror"])
         self.assertEqual(str(exploit_db), report["sources"]["exploit_db"])
         self.assertEqual(core_stub, report["core"])
-        self.assertEqual(1, len(report["trivy_vuln_list"]))
-        self.assertEqual("ubuntu", report["trivy_vuln_list"][0]["source"])
         self.assertEqual(1, len(report["go_exploitdb"]))
         self.assertEqual("go-exploitdb", report["go_exploitdb"][0]["source"])
         self.assertEqual(1, len(report["hot"]))
@@ -96,4 +75,4 @@ class DeepDiveContractTests(TestCase):
         self.assertIn("permanent_fix", report["impact"])
         self.assertIn("detection_guidance", report["impact"])
         self.assertIn("residual_risk", report["impact"])
-        self.assertEqual(["kev"], report["impact"]["evidence"]["signals"])
+        self.assertEqual(["hot", "kev"], report["impact"]["evidence"]["signals"])

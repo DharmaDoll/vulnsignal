@@ -233,8 +233,18 @@ def summarize_feed(conn: sqlite3.Connection, feed: str) -> dict[str, Any]:
 def summarize(feeds: list[str] | None = None, db_path: Path = DB_PATH) -> list[dict[str, Any]]:
     conn = connect(db_path)
     try:
-        selected = feeds or list(FEED_PROVIDERS)
-        return [summarize_feed(conn, feed) for feed in selected]
+        selected = feeds or [feed for feed in FEED_PROVIDERS if not feed.startswith("trivy")]
+        items = [summarize_feed(conn, feed) for feed in selected]
+        for item in items:
+            row = conn.execute("""
+                SELECT m.rows_read, m.elapsed_seconds, m.http_body_bytes FROM fetch_log f
+                LEFT JOIN feed_metrics m ON m.fetch_id=f.id WHERE f.feed=?
+                ORDER BY f.attempted_at DESC, f.id DESC LIMIT 1
+            """, (item["feed"],)).fetchone()
+            if row:
+                item.update(rows_fetched=row["rows_read"], elapsed_seconds=row["elapsed_seconds"],
+                            http_body_bytes=row["http_body_bytes"])
+        return items
     finally:
         conn.close()
 

@@ -25,6 +25,7 @@ clone_fresh() {
 }
 
 clone_or_pull() {
+  local SECONDS=0
   repo_url="$1"
   target_dir="$2"
 
@@ -41,10 +42,10 @@ clone_or_pull() {
   else
     clone_fresh "$repo_url" "$target_dir"
   fi
+  printf 'mirror_refresh %s elapsed_seconds=%s\n' "${target_dir##*/}" "$SECONDS"
 }
 
 mkdir -p "$ROOT_DIR/data"
 clone_or_pull "https://github.com/github/advisory-database" "$ROOT_DIR/data/github-advisory-database-mirror"
 clone_or_pull "https://github.com/CVEProject/cvelistV5" "$ROOT_DIR/data/cvelistv5-mirror"
-clone_or_pull "https://github.com/aquasecurity/vuln-list" "$ROOT_DIR/data/aquasecurity-vuln-list-mirror"
 clone_or_pull "https://github.com/cisagov/vulnrichment" "$ROOT_DIR/data/vulnrichment-mirror"

@@ -5,7 +5,11 @@ import math
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from functools import lru_cache
+from html.parser import HTMLParser
+from itertools import zip_longest
 from typing import Any
 from urllib.parse import parse_qs, quote, quote_plus, urljoin, urlparse, unquote
 
@@ -124,6 +128,7 @@ class HotEvidence:
     domain: str
     query: str
     matched_terms: list[str]
+    published_at: str | None = None
 
 
 def canonicalize_url(href: str) -> str:
@@ -139,7 +144,7 @@ def canonicalize_url(href: str) -> str:
 
 def normalize_domain(url: str) -> str:
     parsed = urlparse(url)
-    return parsed.netloc.lower()
+    return (parsed.hostname or "").lower()
 
 
 def strip_tags(text: str) -> str:
@@ -298,6 +303,44 @@ def _xml_text(element: ET.Element, *names: str) -> str | None:
     return None
 
 
+class ArticleMetadata(HTMLParser):
+    """Read the page's own headline and description, excluding navigation and related links."""
+
+    def __init__(self):
+        super().__init__()
+        self.in_title = False
+        self.parts = []
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == "title":
+            self.in_title = True
+        elif tag == "meta" and (attrs.get("property") or attrs.get("name") or "").lower() in {
+            "og:title", "og:description", "description",
+        }:
+            self.parts.append(attrs.get("content") or "")
+
+    def handle_endtag(self, tag):
+        if tag == "title":
+            self.in_title = False
+
+    def handle_data(self, data):
+        if self.in_title:
+            self.parts.append(data)
+
+
+def add_article_metadata(item):
+    article_html = fetch_text(item["url"], headers={"User-Agent": DEFAULT_USER_AGENT})
+    metadata = ArticleMetadata()
+    metadata.feed(article_html)
+    metadata.close()
+    article_text = " ".join(dict.fromkeys(metadata.parts))
+    cve_ids = extract_cve_ids(article_text)
+    if cve_ids:
+        item["summary"] = f"{item['summary']} {article_text}".strip()
+        item["cve_ids"] = cve_ids
+
+
 def fetch_rss_feed_items(
     feed_name: str,
     feed_url: str,
@@ -320,32 +363,29 @@ def fetch_rss_feed_items(
             link_el = entry.find("{http://www.w3.org/2005/Atom}link")
             if link_el is not None:
                 link = link_el.attrib.get("href")
-        description = _xml_text(entry, "description", "content", "{http://purl.org/rss/1.0/modules/content/}encoded")
-        published_at = _xml_text(entry, "pubDate", "published", "updated")
+        description = _xml_text(entry, "description", "{http://www.w3.org/2005/Atom}summary", "content", "{http://purl.org/rss/1.0/modules/content/}encoded")
+        published_at = _xml_text(entry, "pubDate", "published", "{http://www.w3.org/2005/Atom}published")
         if not title or not link:
             continue
         summary = strip_tags(description or "")
         full_text = " ".join(part for part in (title, summary, link) if part)
         cve_ids = extract_cve_ids(full_text)
+        item = {
+            "feed": feed_name,
+            "query": feed_url,
+            "title": strip_tags(title),
+            "summary": summary,
+            "url": link,
+            "domain": normalize_domain(link),
+            "published_at": published_at,
+            "cve_ids": cve_ids,
+        }
         if not cve_ids and follow_article_links:
             try:
-                article_html = fetch_text(link, headers={"User-Agent": DEFAULT_USER_AGENT})
-                article_text = strip_tags(article_html)
-                cve_ids = extract_cve_ids(" ".join(part for part in (title, summary, article_text, link) if part))
+                add_article_metadata(item)
             except FetchError:
-                cve_ids = []
-        items.append(
-            {
-                "feed": feed_name,
-                "query": feed_url,
-                "title": strip_tags(title),
-                "summary": summary,
-                "url": link,
-                "domain": normalize_domain(link),
-                "published_at": published_at,
-                "cve_ids": cve_ids,
-            }
-        )
+                pass
+        items.append(item)
         if len(items) >= results_per_query:
             break
     return items
@@ -396,34 +436,48 @@ def discover_hot_candidates(
         baseline_query_terms.extend(explicit_query_terms)
         baseline_query_terms = list(dict.fromkeys(baseline_query_terms))
 
+    feed_batches = []
     for feed_name, feed_url in RSS_FEEDS:
         search_queries.append(feed_url)
         try:
-            feed_items = fetch_rss_feed_items(
-                feed_name,
-                feed_url,
-                results_per_query=results_per_query,
-                follow_article_links=follow_article_links,
-            )
-        except FetchError as exc:
+            feed_batches.append(fetch_rss_feed_items(
+                feed_name, feed_url, results_per_query=results_per_query, follow_article_links=False,
+            ))
+        except (FetchError, ET.ParseError) as exc:
             fetch_errors.append({"feed": feed_name, "query": feed_url, "error": str(exc)})
-            continue
 
-        for item in feed_items:
-            hits.append(item)
-            for vuln_id in item["cve_ids"]:
-                if vuln_id in seen_ids:
-                    continue
-                seen_ids.add(vuln_id)
-                candidate_ids.append(vuln_id)
-                if len(candidate_ids) >= max_candidates:
-                    break
+    def admit(ids):
+        for vuln_id in ids:
             if len(candidate_ids) >= max_candidates:
                 break
-        if len(candidate_ids) >= max_candidates:
-            break
+            if vuln_id not in seen_ids:
+                seen_ids.add(vuln_id)
+                candidate_ids.append(vuln_id)
 
-    if enable_duckduckgo:
+    ids_per_feed = [dict.fromkeys(cve for item in batch for cve in item["cve_ids"])
+                    for batch in feed_batches]
+    for group in zip_longest(*ids_per_feed):
+        admit(cve for cve in group if cve is not None)
+    for group in zip_longest(*feed_batches):
+        for item in group:
+            if item is not None:
+                hits.append(item)
+    if follow_article_links:
+        fetched_urls = set()
+        for item in hits:
+            if len(candidate_ids) >= max_candidates or len(fetched_urls) >= results_per_query:
+                break
+            if item["cve_ids"] or item["url"] in fetched_urls:
+                continue
+            fetched_urls.add(item["url"])
+            try:
+                add_article_metadata(item)
+            except FetchError as exc:
+                fetch_errors.append({"feed": item["feed"], "query": item["url"], "error": str(exc)})
+                continue
+            admit(item["cve_ids"])
+
+    if enable_duckduckgo and len(candidate_ids) < max_candidates:
         for query in _build_discovery_queries(baseline_query_terms):
             search_queries.append(query)
             try:
@@ -448,19 +502,13 @@ def discover_hot_candidates(
                     "cve_ids": cve_ids,
                 }
                 hits.append(item)
-                for vuln_id in cve_ids:
-                    if vuln_id in seen_ids:
-                        continue
-                    seen_ids.add(vuln_id)
-                    candidate_ids.append(vuln_id)
-                    if len(candidate_ids) >= max_candidates:
-                        break
+                admit(cve_ids)
                 if len(candidate_ids) >= max_candidates:
                     break
             if len(candidate_ids) >= max_candidates:
                 break
 
-        if not explicit_query_terms and len(candidate_ids) < max(5, max_candidates // 2):
+        if not explicit_query_terms and len(candidate_ids) < min(max_candidates, max(5, max_candidates // 2)):
             for query in _build_discovery_queries(list(DEFAULT_BROADEN_QUERY_TERMS)):
                 search_queries.append(query)
                 try:
@@ -482,13 +530,7 @@ def discover_hot_candidates(
                         "cve_ids": cve_ids,
                     }
                     hits.append(item)
-                    for vuln_id in cve_ids:
-                        if vuln_id in seen_ids:
-                            continue
-                        seen_ids.add(vuln_id)
-                        candidate_ids.append(vuln_id)
-                        if len(candidate_ids) >= max_candidates:
-                            break
+                    admit(cve_ids)
                     if len(candidate_ids) >= max_candidates:
                         break
                 if len(candidate_ids) >= max_candidates:
@@ -515,6 +557,7 @@ def discover_hot_candidates(
                     continue
                 item = {
                     "feed": "Hatena Bookmark",
+                    "metadata": metadata,
                     "query": search_query,
                     "title": hit.title,
                     "summary": "",
@@ -524,13 +567,7 @@ def discover_hot_candidates(
                     "cve_ids": cve_ids,
                 }
                 hits.append(item)
-                for vuln_id in cve_ids:
-                    if vuln_id in seen_ids:
-                        continue
-                    seen_ids.add(vuln_id)
-                    candidate_ids.append(vuln_id)
-                    if len(candidate_ids) >= max_candidates:
-                        break
+                admit(cve_ids)
                 if len(candidate_ids) >= max_candidates:
                     break
             if len(candidate_ids) >= max_candidates:
@@ -541,7 +578,7 @@ def discover_hot_candidates(
         "search_queries": search_queries,
         "result_count": len(hits),
         "discovered_vuln_ids": candidate_ids,
-        "search_hits": hits[:10],
+        "search_hits": hits,
         "urls": [item["url"] for item in hits[:10]],
         "fetch_errors": fetch_errors,
     }
@@ -572,106 +609,79 @@ def _match_terms(text: str) -> list[str]:
 
 
 NEGATION_RE = re.compile(
-    r"\b(?:no|not|without|never|none|lack|lacks|lacking|absence|absent)\b(?:\W+\w+){0,3}\W*$",
+    r"\b(?:no|not|without|never|none|lack|lacks|lacking|absence|absent|could|might|may)\b(?:[ \-]+\w+){0,4}[ \-]*$",
     re.IGNORECASE,
 )
 
 
 def _contains_positive_phrase(text: str, phrase: str) -> bool:
     normalized = text.lower()
-    phrase_re = re.compile(re.escape(phrase.lower()))
+    phrase_re = re.compile(r"\b" + re.escape(phrase.lower()) + r"\b")
     for match in phrase_re.finditer(normalized):
         prefix = normalized[max(0, match.start() - 120) : match.start()]
-        if NEGATION_RE.search(prefix):
+        suffix = normalized[match.end():]
+        if NEGATION_RE.search(prefix) or re.match(
+            r"\s+(?:(?:is|was|has|remains|has been)\s+)?(?:not|unavailable|unconfirmed|unknown)\b", suffix
+        ):
             continue
         return True
     return False
 
 
+def article_date(raw):
+    if not raw or not isinstance(raw, str):
+        return None
+    try:
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError:
+            parsed = parsedate_to_datetime(raw)
+        if parsed.tzinfo is not None:
+            return parsed.astimezone(timezone.utc).isoformat(timespec="seconds")
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return None
+
+
 def classify_hit(hit: SearchHit) -> HotEvidence | None:
-    content_text = f"{hit.title} {hit.url}".lower()
-    query_text = hit.query.lower()
-    search_text = f"{content_text} {query_text}"
-    matched_terms = _match_terms(search_text)
-    domain = hit.domain
+    content_text = hit.title.lower()
+    matched_terms = _match_terms(content_text)
+    domain = normalize_domain(hit.url).removeprefix("www.")
 
-    evidence_type: str | None = None
-    source_type = "other"
-    weight = 0.0
+    def from_domain(names):
+        return any(domain == name or domain.endswith("." + name) for name in names)
 
-    if "cisa.gov" in domain and ("known exploited vulnerabilities" in content_text or "kev" in content_text):
-        evidence_type = "kev"
+    active = any(_contains_positive_phrase(content_text, phrase)
+                 for phrase in ("active exploitation", "actively exploited", "exploited in the wild"))
+    poc = any(_contains_positive_phrase(content_text, phrase)
+              for phrase in ("proof of concept", "proof-of-concept", "poc", "public exploit code"))
+    # A roundup can report exploitation of one issue and merely list another.
+    single_issue = len(extract_cve_ids(f"{hit.title} {hit.url}")) <= 1
+    active = active and single_issue
+    poc = poc and single_issue
+    if from_domain(("cisa.gov",)):
         source_type = "cisa"
-        weight = 1.0
-    elif "cisa.gov" in domain:
-        source_type = "cisa"
-        if "active exploitation" in content_text or "actively exploited" in content_text:
-            evidence_type = "active_exploitation"
-            weight = 0.95
-        elif "proof of concept" in content_text or "poc" in content_text or "exploit" in content_text or "weaponized" in content_text:
-            evidence_type = "public_poc"
-            weight = 0.8
-        elif any(needle in content_text for needle in ("advisory", "alert", "vulnerability")):
-            evidence_type = "news_mention"
-            weight = 0.55
-    elif any(domain.endswith(part) or f".{part}" in domain for part in X_DOMAINS):
-        evidence_type = "x_mention"
-        source_type = "social"
-        weight = 0.25
-    elif any(part in domain for part in NEWS_DOMAINS):
+        if single_issue and any(_contains_positive_phrase(content_text, term)
+                                for term in ("known exploited vulnerabilities", "kev")):
+            evidence_type, weight = "kev", 1.0
+        elif active:
+            evidence_type, weight = "active_exploitation", 0.95
+        elif poc:
+            evidence_type, weight = "public_poc", 0.8
+        else:
+            evidence_type, weight = "news_mention", 0.55
+    elif from_domain(X_DOMAINS):
+        evidence_type, source_type, weight = "x_mention", "social", 0.25
+    elif from_domain(NEWS_DOMAINS):
         source_type = "news"
-        if (
-            _contains_positive_phrase(content_text, "active exploitation")
-            or _contains_positive_phrase(content_text, "actively exploited")
-            or _contains_positive_phrase(content_text, "in the wild")
-        ):
-            evidence_type = "active_exploitation"
-            weight = 0.95
-        elif (
-            _contains_positive_phrase(content_text, "proof of concept")
-            or re.search(r"\bpoc\b", content_text)
-            or _contains_positive_phrase(content_text, "exploit")
-            or _contains_positive_phrase(content_text, "weaponized")
-        ):
-            evidence_type = "public_poc"
-            weight = 0.75
+        if active:
+            evidence_type, weight = "active_exploitation", 0.95
+        elif poc:
+            evidence_type, weight = "public_poc", 0.75
         else:
-            evidence_type = "news_mention"
-            weight = 0.45
-    elif any(needle in content_text for needle in ("advisory", "security update", "security bulletin", "mitigation")):
-        evidence_type = "vendor_advisory"
-        source_type = "vendor"
-        if _contains_positive_phrase(content_text, "active exploitation") or _contains_positive_phrase(content_text, "actively exploited"):
-            weight = 0.9
-        elif _contains_positive_phrase(content_text, "exploit") or re.search(r"\bpoc\b", content_text) or _contains_positive_phrase(content_text, "proof of concept"):
-            weight = 0.7
-        else:
-            weight = 0.65
-    elif matched_terms:
-        if (
-            _contains_positive_phrase(search_text, "active exploitation")
-            or _contains_positive_phrase(search_text, "actively exploited")
-            or _contains_positive_phrase(search_text, "in the wild")
-        ):
-            evidence_type = "active_exploitation"
-            source_type = "search"
-            weight = 0.82
-        elif (
-            _contains_positive_phrase(search_text, "proof of concept")
-            or re.search(r"\bpoc\b", search_text)
-            or _contains_positive_phrase(search_text, "exploit")
-            or _contains_positive_phrase(search_text, "weaponized")
-        ):
-            evidence_type = "public_poc"
-            source_type = "search"
-            weight = 0.6
-        else:
-            evidence_type = "mention"
-            source_type = "search"
-            weight = 0.2
-    elif "b.hatena.ne.jp" in domain or "bookmark.hatena.ne.jp" in domain:
-        evidence_type = "hatena_popular"
-        source_type = "social"
+            evidence_type, weight = "news_mention", 0.45
+    elif from_domain(("b.hatena.ne.jp", "bookmark.hatena.ne.jp")):
+        evidence_type, source_type = "hatena_popular", "social"
         hatena_users = None
         metadata = getattr(hit, "metadata", None)
         if isinstance(metadata, dict):
@@ -685,7 +695,16 @@ def classify_hit(hit: SearchHit) -> HotEvidence | None:
         else:
             weight = 0.55
 
-    if evidence_type is None:
+    elif any(term in content_text for term in ("advisory", "security update", "security bulletin", "mitigation")):
+        evidence_type, source_type = "vendor_advisory", "vendor"
+        weight = 0.9 if active else 0.7 if poc else 0.65
+    elif active:
+        evidence_type, source_type, weight = "active_exploitation", "search", 0.82
+    elif poc:
+        evidence_type, source_type, weight = "public_poc", "search", 0.6
+    elif matched_terms or extract_cve_ids(f"{hit.title} {hit.url}"):
+        evidence_type, source_type, weight = "mention", "search", 0.2
+    else:
         return None
 
     return HotEvidence(
@@ -697,6 +716,7 @@ def classify_hit(hit: SearchHit) -> HotEvidence | None:
         domain=domain,
         query=hit.query,
         matched_terms=matched_terms,
+        published_at=article_date((hit.metadata or {}).get("published_at")),
     )
 
 
@@ -789,15 +809,8 @@ def collect_hot_evidence_for_vuln(
     queries: list[str]
     if hits is not None:
         queries = list(dict.fromkeys(hit.query for hit in hits if hit.query))
-        unique_hits = []
-        seen_urls: set[str] = set()
-        for hit in hits:
-            if hit.url in seen_urls:
-                continue
-            seen_urls.add(hit.url)
-            unique_hits.append(hit)
     else:
-        queries = hot_queries(title, summary)
+        queries = [f'"{vuln_id}"', *hot_queries(title, summary)]
         queries = queries[: max(1, queries_per_vuln)]
         hits = []
         for query in queries:
@@ -810,19 +823,28 @@ def collect_hot_evidence_for_vuln(
             except FetchError:
                 pass
 
-        unique_hits = []
-        seen_urls: set[str] = set()
-        for hit in hits:
-            if hit.url in seen_urls:
-                continue
+    unique_hits = []
+    evidence = []
+    seen_urls = set()
+    for hit in hits:
+        if hit.url in seen_urls:
+            continue
+        excerpt = (hit.metadata or {}).get("body_text")
+        if excerpt and vuln_id.upper() in extract_cve_ids(excerpt):
+            hit = SearchHit(hit.query, f"{hit.title} {excerpt}", hit.url, hit.domain, hit.metadata)
+        unique_hits.append(hit)
+        text = f"{hit.title} {hit.url}"
+        if vuln_id.upper() not in extract_cve_ids(text):
+            continue
+        item = classify_hit(hit)
+        if item:
             seen_urls.add(hit.url)
-            unique_hits.append(hit)
-
-    evidence = [item for item in (classify_hit(hit) for hit in unique_hits) if item is not None]
+            evidence.append(item)
     if not evidence:
         return None
 
     evidence.sort(key=lambda item: (item.weight, item.domain, item.url), reverse=True)
+    evidence = evidence[:10]
     score = _confidence_score(evidence)
     search_queries = queries
     hit_details = [
@@ -846,6 +868,7 @@ def collect_hot_evidence_for_vuln(
             "domain": item.domain,
             "query": item.query,
             "matched_terms": item.matched_terms,
+            "published_at": item.published_at,
         }
         for item in evidence[:10]
     ]
@@ -863,3 +886,32 @@ def collect_hot_evidence_for_vuln(
         "evidence_details": evidence_details,
         "headline": evidence[0].title,
     }
+
+
+def reviewed_hot_value(vuln_id, value):
+    """Replay saved article evidence locally. Old page-wide CVE lists are ambiguous."""
+    if value.get("hot_rule_version") == 2:
+        return value
+    discoveries = {item["url"]: item for item in value.get("discovery_hits") or []
+                   if isinstance(item, dict) and item.get("url")}
+    hits = []
+    for detail in value.get("evidence_details") or []:
+        if not isinstance(detail, dict):
+            continue
+        url = detail.get("url")
+        if not url:
+            continue
+        discovery = discoveries.get(url, {})
+        # In v1 the reference fallback could manufacture a title from the CVE record.
+        # Its synthetic query was the expanded PoC search and no article was fetched.
+        if not discovery and 'exploit OR PoC OR "active exploitation"' in (detail.get("query") or ""):
+            continue
+        hits.append(SearchHit(detail.get("query") or "", detail.get("title") or "",
+                              url, normalize_domain(url), {"published_at": discovery.get("published_at")}))
+    if not value.get("evidence_details"):
+        # A URL can identify the CVE even in old payloads without per-URL titles.
+        hits = [SearchHit("", "", url, normalize_domain(url)) for url in value.get("urls") or [] if url]
+    evidence = collect_hot_evidence_for_vuln(vuln_id, hits=hits)
+    if evidence:
+        return {**value, **evidence}
+    return None

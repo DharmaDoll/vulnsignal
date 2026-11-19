@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from sync.common import (
+    run_measured,
     ROOT,
     FetchResult,
     JsonArrayCacheWriter,
@@ -359,6 +360,9 @@ def sync(
                             provider=PROVIDER,
                             score=float(cvss_score) if cvss_score is not None else None,
                             value={
+                                "title": item.get("title"),
+                                "summary": item.get("summary"),
+                                "published_at": item.get("published_at"),
                                 "ghsa_id": item.get("ghsa_id"),
                                 "aliases": item.get("aliases"),
                                 "severity": item.get("severity"),
@@ -426,6 +430,9 @@ def sync(
                         provider=PROVIDER,
                         score=float(cvss_score) if cvss_score is not None else None,
                         value={
+                            "title": item.get("title"),
+                            "summary": item.get("summary"),
+                            "published_at": item.get("published_at"),
                             "ghsa_id": item.get("ghsa_id"),
                             "aliases": item.get("aliases"),
                             "severity": item.get("severity"),
@@ -497,7 +504,7 @@ def main() -> None:
         help="Only write advisories published in this year or later to core.db.",
     )
     args = parser.parse_args()
-    result = sync(
+    result = run_measured(FEED, sync,
         source_dir=args.source_dir,
         limit=args.limit,
         dry_run=args.dry_run,

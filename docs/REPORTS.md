@@ -5,7 +5,7 @@ effects, and storage locations.
 
 The short version:
 
-- Use `scripts/run_daily_review.py --daily` when you want to refresh data and
+- Use `scripts/refresh_intelligence.py --refresh --save` when you want to refresh data and
   produce the daily operator report.
 - Use `scripts/report_recent_attention.py` when data is already current and you
   only want a reproducible, date-columned attention report.
@@ -20,7 +20,7 @@ external feeds / git mirrors / db/exploit.db
   -> scripts/ingest_recent_core_db.sh
   -> db/core.db
   -> sync.fetch_hot
-  -> scripts/run_daily_review.py
+  -> scripts/refresh_intelligence.py
        -> data/reports/triage/*.json
        -> data/reports/triage/llm_reviews/*.json
 
@@ -29,28 +29,28 @@ db/core.db
        -> data/reports/attention/*.json
 ```
 
-`run_daily_review.py --daily` is allowed to mutate local data because it is the
-daily operation wrapper. `report_recent_attention.py` is read-only with respect
+`refresh_intelligence.py --refresh --save` is allowed to mutate local data because it is the
+intelligence update entry point. `report_recent_attention.py` is read-only with respect
 to vulnerability data; it only runs migrations and writes its own report file.
 
 ## Report Types
 
 | Report | Command | Saves to | Updates feeds or DB? | Purpose |
 |---|---|---|---|---|
-| Daily review | `uv run python scripts/run_daily_review.py --daily --limit 40` | `data/reports/triage/*.json` | Yes | End-to-end daily operator run: refresh sources, ingest recent data, refresh hot, triage new CVEs, optionally review and deep-dive. |
-| Daily review, report-only | `uv run python scripts/run_daily_review.py --limit 40` | `data/reports/triage/*.json` | No feed refresh; runs migrations | Re-run the daily review view from the existing `core.db` without mirror refresh, ingest, or hot refresh. |
+| Daily review | `uv run python scripts/refresh_intelligence.py --refresh --save --limit 40` | `data/reports/triage/*.json` | Yes | End-to-end daily operator run: refresh sources, ingest recent data, refresh hot, triage new CVEs, optionally review and deep-dive. |
+| Daily review, report-only | `uv run python scripts/refresh_intelligence.py --limit 40` | `data/reports/triage/*.json` | No feed refresh; runs migrations | Re-run the daily review view from the existing `core.db` without mirror refresh, ingest, or hot refresh. |
 | Recent attention | `uv run python scripts/report_recent_attention.py --days 7 --as-of <ISO8601>` | `data/reports/attention/*.json` | No feed refresh; runs migrations | Reproducible recent watchlist with date columns for operator-facing review. |
 | Codex triage review log | Produced by `--codex-review` | `data/reports/triage/llm_reviews/*.json` | No direct feed updates | Audit trail for context review decisions, including suppress reasons. |
 | Manual triage JSON | `uv run python scripts/triage_new_cves.py --since <ISO8601> --json` | stdout only | No, except migration | Low-level deterministic triage output. Use when debugging candidate selection. |
 | Deep dive JSON | `uv run python scripts/deep_dive.py CVE-... --json` | stdout only | No, except optional targeted hot refresh when requested by that tool | Single-CVE investigation. When daily review deep-dives watch items, the result is embedded in the daily JSON. |
 | Hot CLI view | `uv run python -m app.skills hot --limit 20 --details` | stdout only | No, unless `--vuln-id` triggers targeted refresh | Inspect current hot evidence from `core.db`. |
 
-## Daily Review
+## Intelligence Refresh and Daily Review
 
 Default command:
 
 ```bash
-uv run python scripts/run_daily_review.py --daily --limit 40
+uv run python scripts/refresh_intelligence.py --refresh --save --limit 40
 ```
 
 Default save directory:
@@ -73,8 +73,10 @@ Main dependencies:
 
 Important behavior:
 
-- `--daily` enables source refresh, recent ingest, hot refresh, Codex review,
+- `--refresh --save` enables source refresh, recent ingest, hot refresh, Codex review,
   and watch-now deep dives.
+- Source refresh and other long-running commands stream their live output to the
+  terminal while still saving stdout/stderr tails into the report JSON.
 - If `refresh_all_sources.sh` runs first, the wrapper passes
   `SKIP_MIRROR_REFRESH=1` into `ingest_recent_core_db.sh` so mirrors are not
   refreshed twice.
@@ -93,8 +95,8 @@ Use this when:
 Do not use this when:
 
 - The feeds have already been refreshed and ingested, and you only want another
-  operator view. Use `report_recent_attention.py` or `run_daily_review.py`
-  without `--daily`.
+  operator view. Use `report_recent_attention.py` or `refresh_intelligence.py`
+  without `--refresh --save`.
 
 ## Recent Attention
 
@@ -194,10 +196,18 @@ Use these when:
 
 | Need | Use |
 |---|---|
-| Run the full daily operation from external sources to operator output | `run_daily_review.py --daily` |
-| Re-run a daily-style view from the existing DB | `run_daily_review.py --limit 40` |
+| Run the full daily operation from external sources to operator output | `refresh_intelligence.py --refresh --save` |
+| Re-run a daily-style view from the existing DB | `refresh_intelligence.py --limit 40` |
 | Show the last 7 days of notable vulnerabilities with date columns | `report_recent_attention.py --days 7 --as-of <time>` |
 | Explain why a candidate was suppressed | `data/reports/triage/llm_reviews/*.json` |
 | Debug raw deterministic triage candidate selection | `triage_new_cves.py --since <time> --json` |
 | Investigate one CVE deeply | `deep_dive.py CVE-... --json` |
 | Inspect current hot evidence only | `python -m app.skills hot --details` |
+
+## 期間別推薦の並行評価
+
+日次の明示エクスポート（--refresh --save）は同じ実行の従来トリアージ結果と新方式の入力を圧縮JSONに保存する。単独集計は `python -m scripts.period_recommendations` を使う。`--period day|week|month|quarter`、`--date YYYY-MM-DD`、`--timezone`、オフセット付き `--as-of` を指定できる。各期間は開始を含み、終了・締切を含まない。`--json` は推薦根拠と観測欠損区間の詳細を出力する。月報・四半期報には前期の代表案件、テーマ別件数、比較可否を含む。
+
+`--replay FILE` はDBやネットワークを使わず保存内容を再計算する。同じ入力で `--themes FILE` または `--exclude-feed FEED` を指定すると、登録テーマや採用ソースを変えた結果を別のファイルに保存する。資料の観測時刻は取り込み時刻であり、初回公表の証拠には公表日・KEV追加日など出典側の日付を使う。
+
+比較評価では `python -m scripts.evaluate_recommendations prompt SNAPSHOT` が固定プロンプトと対象期間・判断締切を出力する。簡易プロンプトの上位IDをJSON配列に保存し、`prepare SNAPSHOT --simple-result IDS.json --output-dir REVIEW_DIR` で方式名を伏せた評価票を生成する。単独集計には同じ締切の従来方式のID配列を `--baseline` で渡す。読者が評価票の worth_reading、出典整合性 source_supported と独立に選んだ重要案件一覧 independent_watchlist を記入し、`score REVIEW_DIR/ballot.json REVIEW_DIR/methods.json` で的中率・掲載件数・見逃しを集計する。判定に使う事実は当日の締切までに公表されたものに限る。
